@@ -10,21 +10,36 @@ use PhpAmqpLib\Exception\AMQPRuntimeException;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
 use Yii;
 use illusiard\rabbitmq\contracts\ConsumerInterface;
+use illusiard\rabbitmq\contracts\PublisherInterface;
+use illusiard\rabbitmq\retry\RetryDecider;
+use illusiard\rabbitmq\retry\RetryDecision;
 
 class AmqpConsumer implements ConsumerInterface
 {
     private AmqpConnection $connection;
     /** @var callable|null */
     private $shouldStop;
+    private bool $managedRetry = false;
+    private array $retryPolicy = [];
+    private ?PublisherInterface $retryPublisher = null;
+    private RetryDecider $retryDecider;
 
     public function __construct(AmqpConnection $connection)
     {
         $this->connection = $connection;
+        $this->retryDecider = new RetryDecider();
     }
 
     public function setStopChecker(callable $shouldStop): void
     {
         $this->shouldStop = $shouldStop;
+    }
+
+    public function setManagedRetry(bool $enabled, array $policy, ?PublisherInterface $publisher): void
+    {
+        $this->managedRetry = $enabled;
+        $this->retryPolicy = $policy;
+        $this->retryPublisher = $publisher;
     }
 
     public function consume(string $queue, callable $handler, int $prefetch = 1): void
@@ -98,7 +113,27 @@ class AmqpConsumer implements ConsumerInterface
                 if ($result) {
                     $message->getChannel()->basic_ack($message->getDeliveryTag());
                 } else {
-                    $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
+                    if ($this->managedRetry) {
+                        try {
+                            $decision = $this->retryDecider->decide($meta, $this->retryPolicy);
+                            $this->handleManagedDecision(
+                                $decision,
+                                $message->getBody(),
+                                $meta,
+                                function () use ($message) {
+                                    $message->getChannel()->basic_ack($message->getDeliveryTag());
+                                },
+                                function () use ($message) {
+                                    $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
+                                }
+                            );
+                        } catch (\Throwable $e) {
+                            $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
+                            throw $e;
+                        }
+                    } else {
+                        $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
+                    }
                 }
 
                 $this->cancelIfNeeded($message->getChannel(), $consumerTag);
@@ -131,6 +166,54 @@ class AmqpConsumer implements ConsumerInterface
     {
         if ($this->shouldStop && ($this->shouldStop)()) {
             $channel->basic_cancel($consumerTag);
+        }
+    }
+
+    protected function handleManagedDecision(
+        RetryDecision $decision,
+        string $body,
+        array $meta,
+        callable $ack,
+        callable $reject
+    ): void {
+        if ($decision->action === 'retry') {
+            if (!$decision->retryQueue || !$this->retryPublisher) {
+                Yii::warning('Retry requested but publisher or retry queue is missing.', 'rabbitmq');
+                $reject();
+                return;
+            }
+
+            Yii::info('Retrying message via queue: ' . $decision->retryQueue, 'rabbitmq');
+            $this->republish($body, $decision->retryQueue, $meta);
+            $ack();
+            return;
+        }
+
+        if ($decision->action === 'dead') {
+            if ($decision->retryQueue && $this->retryPublisher) {
+                Yii::warning('Sending message to dead queue: ' . $decision->retryQueue, 'rabbitmq');
+                $this->republish($body, $decision->retryQueue, $meta);
+                $ack();
+                return;
+            }
+
+            Yii::warning('Dead action requested but dead queue is missing.', 'rabbitmq');
+            $reject();
+            return;
+        }
+
+        $reject();
+    }
+
+    private function republish(string $body, string $queue, array $meta): void
+    {
+        try {
+            $properties = isset($meta['properties']) && is_array($meta['properties']) ? $meta['properties'] : [];
+            $headers = isset($meta['headers']) && is_array($meta['headers']) ? $meta['headers'] : [];
+            $this->retryPublisher->publish($body, '', $queue, $properties, $headers);
+        } catch (\Throwable $e) {
+            Yii::error('Republish failed: ' . $e->getMessage(), 'rabbitmq');
+            throw $e;
         }
     }
 

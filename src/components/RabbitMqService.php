@@ -26,6 +26,8 @@ class RabbitMqService extends Component
     public bool $confirm = false;
     public bool $mandatory = false;
     public int $publishTimeout = 5;
+    public bool $managedRetry = false;
+    public array $retryPolicy = [];
 
     /** @var callable|null */
     public $connectionFactory;
@@ -77,7 +79,12 @@ class RabbitMqService extends Component
             throw new \InvalidArgumentException('Handler must be callable via __invoke.');
         }
 
-        $this->ensureConnection()->getConsumer()->consume($queue, $handler, $prefetch);
+        $consumer = $this->ensureConnection()->getConsumer();
+        if ($consumer instanceof \illusiard\rabbitmq\amqp\AmqpConsumer) {
+            $consumer->setManagedRetry($this->managedRetry, $this->retryPolicy, $this->getPublisher());
+        }
+
+        $consumer->consume($queue, $handler, $prefetch);
     }
 
     public function setupTopology(array $config): void

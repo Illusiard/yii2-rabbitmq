@@ -1,14 +1,16 @@
 # illusiard/yii2-rabbitmq
 
-Минимальный скелет расширения Yii2 RabbitMQ с отложенным подключением и интерфейсами-заглушками.
+Расширение Yii2 RabbitMQ с отложенным соединением, подтверждением публикации и управляемыми handlers c ретраем.
 
-## Installation
+## Quickstart
+
+Установка:
 
 ```bash
 composer require illusiard/yii2-rabbitmq
 ```
 
-## Configuration
+Конфигурация:
 
 ```php
 return [
@@ -27,12 +29,14 @@ return [
             'confirm' => false,
             'mandatory' => false,
             'publishTimeout' => 5,
+            'managedRetry' => false,
+            'retryPolicy' => [],
         ],
     ],
 ];
 ```
 
-## Usage (publish)
+Publish:
 
 ```php
 /** @var illusiard\rabbitmq\components\RabbitMqService $rabbit */
@@ -43,30 +47,17 @@ $rabbit->publish('Hello', 'exchange', 'route.key', [
 ], [
     'x-trace-id' => 'demo-1',
 ]);
-
-$rabbit->consume('queue.name', function ($message) {
-    // Handle message (stub)
-});
 ```
 
-Consumer доступен через консольную команду.
+## Consumer
 
-## Publisher confirms и mandatory
-
-- `confirm` включает publisher confirms. Публикация ждёт ack/nack от брокера; при nack или таймауте выбрасывается `PublishException`.
-- `mandatory` включает mandatory publish. Если сообщение unroutable, брокер отправит `basic.return`, и будет выброшен `PublishException`.
-- `publishTimeout` задаёт сколько секунд ждать подтверждения/возврата.
-
-Эти опции полезны, когда важна надёжная доставка. При включении возможны ошибки:
-`PublishException` (timeout, nack, unroutable).
-
-## Console consumer
+Запуск:
 
 ```bash
 ./yii rabbitmq/consume queue.name app\\queues\\RabbitMqHandler --prefetch=1 --memoryLimitMb=256
 ```
 
-Пример:
+Handler:
 
 ```php
 <?php
@@ -127,10 +118,56 @@ return [
 
 ```bash
 ./yii rabbitmq/setup-topology
+./yii rabbitmq/setup-topology --dryRun=1 --strict=1
 ```
 
-Dry-run and strict from CLI:
+## Confirm/mandatory
 
-```bash
-./yii rabbitmq/setup-topology --dryRun=1 --strict=1
+- `confirm` включает publisher confirms: публикация ждёт ack/nack, при nack или таймауте будет `PublishException`.
+- `mandatory` включает mandatory publish: unroutable сообщение вернётся через `basic.return`, будет `PublishException`.
+- `publishTimeout` задаёт таймаут ожидания подтверждения/возврата.
+
+Включайте эти опции, когда важна надёжная доставка и нужно явно получать ошибки доставки.
+
+## Managed retry
+
+Если `managedRetry=true`, то при `handler=false` выполняется `RetryDecider` и:
+
+- `retry` — перепубликация в `retryQueue` через default exchange (`exchange=''`, `routingKey=queueName`), затем ACK
+- `dead` — перепубликация в `deadQueue` (если указана), затем ACK
+- `reject` — `basic_reject(false)`
+
+Пример политики:
+
+```php
+'managedRetry' => true,
+'retryPolicy' => [
+    'maxAttempts' => 3,
+    'retryQueues' => [
+        ['name' => 'orders.retry.5s', 'ttlMs' => 5000],
+        ['name' => 'orders.retry.30s', 'ttlMs' => 30000],
+    ],
+    'deadQueue' => 'orders.dead',
+],
+```
+
+Помощник для повторных отправок (в handler):
+
+```php
+<?php
+
+use illusiard\rabbitmq\retry\RetryDecider;
+
+$decider = new RetryDecider();
+$decision = $decider->decide($meta, [
+    'maxAttempts' => 3,
+    'retryQueues' => [
+        ['name' => 'orders.retry.5s', 'ttlMs' => 5000],
+        ['name' => 'orders.retry.30s', 'ttlMs' => 30000],
+    ],
+    'deadQueue' => 'orders.dead',
+]);
+
+// Если handler возвращает false, потребитель отклонит запрос.
+return false;
 ```
