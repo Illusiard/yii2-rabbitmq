@@ -12,6 +12,10 @@ class Module extends BaseModule
     {
         parent::init();
 
+        if (Yii::$app instanceof \yii\console\Application) {
+            $this->controllerNamespace = 'illusiard\\rabbitmq\\console';
+        }
+
         if (Yii::$app !== null && !Yii::$app->has('rabbitmq')) {
             Yii::$app->set('rabbitmq', [
                 'class' => RabbitMqService::class,

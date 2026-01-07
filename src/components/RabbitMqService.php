@@ -2,10 +2,12 @@
 
 namespace illusiard\rabbitmq\components;
 
+use Yii;
 use yii\base\Component;
+use illusiard\rabbitmq\amqp\AmqpConnection;
+use illusiard\rabbitmq\amqp\TopologyManager;
 use illusiard\rabbitmq\contracts\ConnectionInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;
-use illusiard\rabbitmq\contracts\ConsumerInterface;
 use illusiard\rabbitmq\exceptions\ConnectionException;
 use illusiard\rabbitmq\exceptions\PublishException;
 
@@ -20,28 +22,34 @@ class RabbitMqService extends Component
     public float $readWriteTimeout = 3.0;
     public float $connectionTimeout = 3.0;
     public ?array $ssl = null;
+    public array $topology = [];
+    public bool $confirm = false;
+    public bool $mandatory = false;
+    public int $publishTimeout = 5;
 
     /** @var callable|null */
     public $connectionFactory;
 
     private ?ConnectionInterface $connection = null;
+    private ?PublisherInterface $publisher = null;
 
-    public function publish(string $exchange, string $routingKey, string $body, array $properties = []): void
+    public function publish(
+        string $body,
+        string $exchange = '',
+        string $routingKey = '',
+        array $properties = [],
+        array $headers = []
+    ): void
     {
-        $connection = $this->ensureConnection();
-
         try {
-            $connection->getPublisher()->publish($exchange, $routingKey, $body, $properties);
+            $this->getPublisher()->publish($body, $exchange, $routingKey, $properties, $headers);
+        } catch (ConnectionException $e) {
+            throw $e;
+        } catch (PublishException $e) {
+            throw $e;
         } catch (\Throwable $e) {
             throw new PublishException('Publish failed: ' . $e->getMessage(), 0, $e);
         }
-    }
-
-    public function consume(string $queue, callable $handler, array $options = []): void
-    {
-        $connection = $this->ensureConnection();
-
-        $connection->getConsumer()->consume($queue, $handler, $options);
     }
 
     public function getConnection(): ConnectionInterface
@@ -51,6 +59,37 @@ class RabbitMqService extends Component
         }
 
         return $this->connection;
+    }
+
+    public function getPublisher(): PublisherInterface
+    {
+        if ($this->publisher === null) {
+            $this->publisher = $this->ensureConnection()->getPublisher();
+        }
+
+        return $this->publisher;
+    }
+
+    public function consume(string $queue, string $handlerFqcn, int $prefetch = 1): void
+    {
+        $handler = Yii::createObject($handlerFqcn);
+        if (!is_callable($handler)) {
+            throw new \InvalidArgumentException('Handler must be callable via __invoke.');
+        }
+
+        $this->ensureConnection()->getConsumer()->consume($queue, $handler, $prefetch);
+    }
+
+    public function setupTopology(array $config): void
+    {
+        $connection = $this->ensureConnection();
+        if (!$connection instanceof AmqpConnection) {
+            throw new ConnectionException('Topology setup requires AmqpConnection.');
+        }
+
+        $options = $config['options'] ?? [];
+        $manager = new TopologyManager($connection, $options);
+        $manager->apply($config, $options);
     }
 
     private function ensureConnection(): ConnectionInterface
@@ -76,7 +115,7 @@ class RabbitMqService extends Component
             return $factory($this->getConnectionConfig());
         }
 
-        return new StubConnection($this->getConnectionConfig());
+        return new AmqpConnection($this->getConnectionConfig());
     }
 
     private function getConnectionConfig(): array
@@ -91,80 +130,9 @@ class RabbitMqService extends Component
             'readWriteTimeout' => $this->readWriteTimeout,
             'connectionTimeout' => $this->connectionTimeout,
             'ssl' => $this->ssl,
+            'confirm' => $this->confirm,
+            'mandatory' => $this->mandatory,
+            'publishTimeout' => $this->publishTimeout,
         ];
-    }
-}
-
-class StubConnection implements ConnectionInterface
-{
-    private array $config;
-    private bool $connected = false;
-    private ?PublisherInterface $publisher = null;
-    private ?ConsumerInterface $consumer = null;
-
-    public function __construct(array $config)
-    {
-        $this->config = $config;
-    }
-
-    public function connect(): void
-    {
-        $this->connected = true;
-    }
-
-    public function isConnected(): bool
-    {
-        return $this->connected;
-    }
-
-    public function close(): void
-    {
-        $this->connected = false;
-    }
-
-    public function getPublisher(): PublisherInterface
-    {
-        if ($this->publisher === null) {
-            $this->publisher = new StubPublisher($this->config);
-        }
-
-        return $this->publisher;
-    }
-
-    public function getConsumer(): ConsumerInterface
-    {
-        if ($this->consumer === null) {
-            $this->consumer = new StubConsumer($this->config);
-        }
-
-        return $this->consumer;
-    }
-}
-
-class StubPublisher implements PublisherInterface
-{
-    private array $config;
-
-    public function __construct(array $config)
-    {
-        $this->config = $config;
-    }
-
-    public function publish(string $exchange, string $routingKey, string $body, array $properties = []): void
-    {
-    }
-}
-
-class StubConsumer implements ConsumerInterface
-{
-    private array $config;
-
-    public function __construct(array $config)
-    {
-        $this->config = $config;
-    }
-
-    public function consume(string $queue, callable $handler, array $options = []): void
-    {
     }
 }
