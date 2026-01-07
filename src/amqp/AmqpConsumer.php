@@ -13,8 +13,9 @@ use illusiard\rabbitmq\contracts\ConsumerInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;
 use illusiard\rabbitmq\retry\RetryDecider;
 use illusiard\rabbitmq\retry\RetryDecision;
-use illusiard\rabbitmq\exceptions\RabbitMqException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
+use illusiard\rabbitmq\exceptions\FatalException;
+use illusiard\rabbitmq\exceptions\RabbitMqException;
 
 class AmqpConsumer implements ConsumerInterface
 {
@@ -105,6 +106,12 @@ class AmqpConsumer implements ConsumerInterface
                 try {
                     $result = $handler($message->getBody(), $meta);
                 } catch (\Throwable $e) {
+                    if ($e instanceof FatalException) {
+                        $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
+                        $this->cancelIfNeeded($message->getChannel(), $consumerTag);
+                        throw $e;
+                    }
+
                     $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::HANDLER_FAILED;
                     Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
                     $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
@@ -188,8 +195,19 @@ class AmqpConsumer implements ConsumerInterface
                 return;
             }
 
-            Yii::info('Retrying message via queue: ' . $decision->retryQueue, 'rabbitmq');
-            $this->republish($body, $decision->retryQueue, $meta);
+            $properties = isset($meta['properties']) && is_array($meta['properties']) ? $meta['properties'] : [];
+            $messageId = isset($properties['message_id']) ? (string)$properties['message_id'] : '';
+            $correlationId = isset($properties['correlation_id']) ? (string)$properties['correlation_id'] : '';
+            $attempt = $this->resolveRetryCount($meta) + 1;
+
+            Yii::info(
+                'Retrying message: attempt=' . $attempt
+                . ' queue=' . $decision->retryQueue
+                . ' message_id=' . $messageId
+                . ' correlation_id=' . $correlationId,
+                'rabbitmq'
+            );
+            $this->republish($body, $decision->retryQueue, $meta, true);
             $ack();
             return;
         }
@@ -210,11 +228,14 @@ class AmqpConsumer implements ConsumerInterface
         $reject();
     }
 
-    private function republish(string $body, string $queue, array $meta): void
+    private function republish(string $body, string $queue, array $meta, bool $incrementRetryCount = false): void
     {
         try {
             $properties = isset($meta['properties']) && is_array($meta['properties']) ? $meta['properties'] : [];
             $headers = isset($meta['headers']) && is_array($meta['headers']) ? $meta['headers'] : [];
+            if ($incrementRetryCount) {
+                $headers['x-retry-count'] = $this->resolveRetryCount($meta) + 1;
+            }
             $this->retryPublisher->publish($body, '', $queue, $properties, $headers);
         } catch (\Throwable $e) {
             $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::PUBLISH_FAILED;
@@ -229,5 +250,17 @@ class AmqpConsumer implements ConsumerInterface
             || $e instanceof AMQPChannelClosedException
             || $e instanceof AMQPRuntimeException
             || $e instanceof AMQPIOException;
+    }
+
+    private function resolveRetryCount(array $meta): int
+    {
+        $headers = $meta['headers'] ?? [];
+        if (is_array($headers) && isset($headers['x-retry-count']) && is_int($headers['x-retry-count'])) {
+            if ($headers['x-retry-count'] >= 0) {
+                return $headers['x-retry-count'];
+            }
+        }
+
+        return 0;
     }
 }

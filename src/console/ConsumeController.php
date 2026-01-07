@@ -5,6 +5,7 @@ namespace illusiard\rabbitmq\console;
 use Yii;
 use yii\console\Controller;
 use illusiard\rabbitmq\amqp\AmqpConsumer;
+use illusiard\rabbitmq\exceptions\FatalException;
 
 class ConsumeController extends Controller
 {
@@ -52,12 +53,8 @@ class ConsumeController extends Controller
             Yii::info('Consumer started for queue: ' . $queue, 'rabbitmq');
             $consumer->consume($queue, $wrappedHandler, $prefetch);
             Yii::info('Consumer stopped for queue: ' . $queue, 'rabbitmq');
-        } catch (\Throwable $e) {
+        } catch (FatalException $e) {
             $this->stderr($e->getMessage() . PHP_EOL);
-            $code = $e instanceof \illusiard\rabbitmq\exceptions\RabbitMqException
-                ? $e->getErrorCode()
-                : \illusiard\rabbitmq\exceptions\ErrorCode::CONSUME_FAILED;
-            Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
             return 1;
         }
 

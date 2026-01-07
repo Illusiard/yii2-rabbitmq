@@ -12,38 +12,30 @@ class RetryDecider
 
         $attempts = $this->resolveAttempts($meta);
 
+        if (count($retryQueues) === 0) {
+            return RetryDecision::reject('no-retry-queues');
+        }
+
         if ($maxAttempts > 0 && $attempts >= $maxAttempts) {
-            return RetryDecision::dead($deadQueue, 'max attempts reached');
+            return $deadQueue ? RetryDecision::dead($deadQueue, 'max-attempts-reached') : RetryDecision::reject('max-attempts-reached');
         }
 
         if ($attempts < count($retryQueues)) {
             $next = $retryQueues[$attempts] ?? null;
             if (is_array($next) && isset($next['name']) && is_string($next['name']) && $next['name'] !== '') {
-                return RetryDecision::retry($next['name'], 'retry attempt ' . ($attempts + 1));
+                return RetryDecision::retry($next['name'], 'retry-attempt-' . ($attempts + 1));
             }
         }
 
-        return RetryDecision::reject('no retry queue available');
+        return $deadQueue ? RetryDecision::dead($deadQueue, 'no-retry-queues') : RetryDecision::reject('no-retry-queues');
     }
 
     private function resolveAttempts(array $meta): int
     {
         $headers = $meta['headers'] ?? [];
-        if (is_array($headers)) {
-            if (isset($headers['x-death']) && is_array($headers['x-death'])) {
-                $count = 0;
-                foreach ($headers['x-death'] as $entry) {
-                    if (is_array($entry) && isset($entry['count'])) {
-                        $count += (int)$entry['count'];
-                    }
-                }
-                if ($count > 0) {
-                    return $count;
-                }
-            }
-
-            if (isset($headers['x-attempt'])) {
-                return (int)$headers['x-attempt'];
+        if (is_array($headers) && isset($headers['x-retry-count']) && is_int($headers['x-retry-count'])) {
+            if ($headers['x-retry-count'] >= 0) {
+                return $headers['x-retry-count'];
             }
         }
 

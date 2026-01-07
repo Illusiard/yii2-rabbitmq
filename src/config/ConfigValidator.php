@@ -45,6 +45,7 @@ class ConfigValidator
 
         $this->validateMiddlewares($config, 'publishMiddlewares');
         $this->validateMiddlewares($config, 'consumeMiddlewares');
+        $this->validateConsumeOptions($config);
     }
 
     public function validateTopology(array $config): void
@@ -157,6 +158,28 @@ class ConfigValidator
         foreach ($config[$key] as $index => $item) {
             if (!is_string($item) && !is_array($item) && !is_object($item)) {
                 throw new RabbitMqException($key . '[' . $index . '] must be string, array, or object.', ErrorCode::CONFIG_INVALID);
+            }
+        }
+    }
+
+    private function validateConsumeOptions(array $config): void
+    {
+        $this->validateBooleanOption($config, 'consumeFailFast', 'consumeFailFast', ErrorCode::CONFIG_INVALID);
+        $this->validateClassList($config, 'fatalExceptionClasses', 'fatalExceptionClasses');
+        $this->validateClassList($config, 'recoverableExceptionClasses', 'recoverableExceptionClasses');
+    }
+
+    private function validateClassList(array $config, string $key, string $path): void
+    {
+        if (!isset($config[$key])) {
+            return;
+        }
+        if (!is_array($config[$key])) {
+            throw new RabbitMqException($path . ' must be an array.', ErrorCode::CONFIG_INVALID);
+        }
+        foreach ($config[$key] as $index => $item) {
+            if (!is_string($item) || $item === '') {
+                throw new RabbitMqException($path . '[' . $index . '] must be a non-empty string.', ErrorCode::CONFIG_INVALID);
             }
         }
     }

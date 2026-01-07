@@ -16,6 +16,7 @@ use illusiard\rabbitmq\config\ConfigValidator;
 use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\message\MessageSerializerInterface;
 use illusiard\rabbitmq\message\JsonMessageSerializer;
+use illusiard\rabbitmq\consume\ExceptionClassifier;
 use illusiard\rabbitmq\middleware\PublishPipeline;
 use illusiard\rabbitmq\middleware\ConsumePipeline;
 use illusiard\rabbitmq\middleware\PublishMiddlewareInterface;
@@ -43,6 +44,9 @@ class RabbitMqService extends Component
     public $serializer = JsonMessageSerializer::class;
     public array $publishMiddlewares = [];
     public array $consumeMiddlewares = [];
+    public bool $consumeFailFast = true;
+    public array $fatalExceptionClasses = [];
+    public array $recoverableExceptionClasses = [];
     public ?string $componentId = null;
 
     /** @var callable|null */
@@ -79,6 +83,9 @@ class RabbitMqService extends Component
                 'topology' => $this->topology,
                 'publishMiddlewares' => $this->publishMiddlewares,
                 'consumeMiddlewares' => $this->consumeMiddlewares,
+                'consumeFailFast' => $this->consumeFailFast,
+                'fatalExceptionClasses' => $this->fatalExceptionClasses,
+                'recoverableExceptionClasses' => $this->recoverableExceptionClasses,
             ];
 
             if (!empty($this->profiles)) {
@@ -364,7 +371,12 @@ class RabbitMqService extends Component
         }
 
         $middlewares = $this->resolveMiddlewares($this->consumeMiddlewares, ConsumeMiddlewareInterface::class);
-        $this->consumePipeline = new ConsumePipeline($middlewares);
+        $classifier = new ExceptionClassifier(
+            $this->consumeFailFast,
+            $this->fatalExceptionClasses,
+            $this->recoverableExceptionClasses
+        );
+        $this->consumePipeline = new ConsumePipeline($middlewares, $classifier);
         return $this->consumePipeline;
     }
 

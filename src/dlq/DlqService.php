@@ -17,19 +17,26 @@ class DlqService
         $this->service = $service;
     }
 
-    public function inspect(string $queue, int $limit = 10): array
+    public function inspect(string $queue, int $limit = 10, bool $acknowledge = false): array
     {
         $connection = $this->service->getConnection();
         if (!method_exists($connection, 'getAmqpConnection')) {
             throw new RabbitMqException('DLQ inspect requires AMQP connection.', ErrorCode::DLQ_FAILED);
         }
 
+        if ($acknowledge) {
+            Yii::warning('DLQ inspect running in destructive mode (acknowledge=true).', 'rabbitmq');
+        }
+
         $channel = $connection->getAmqpConnection()->channel();
         $items = [];
+        $seen = [];
+        $idleAttempts = 0;
+        $maxIdleAttempts = max(3, $limit);
 
         try {
             for ($i = 0; $i < $limit; $i++) {
-                $message = $channel->basic_get($queue, true);
+                $message = $channel->basic_get($queue, false);
                 if ($message === null) {
                     break;
                 }
@@ -39,6 +46,24 @@ class DlqService
                 if (isset($properties['application_headers']) && $properties['application_headers'] instanceof AMQPTable) {
                     $headers = $properties['application_headers']->getNativeData();
                 }
+
+                $fingerprint = $this->buildFingerprint($message->getBody(), $headers, $properties);
+                if (isset($seen[$fingerprint])) {
+                    $idleAttempts++;
+                    if (!$acknowledge) {
+                        $message->getChannel()->basic_reject($message->getDeliveryTag(), true);
+                    } else {
+                        $message->getChannel()->basic_ack($message->getDeliveryTag());
+                    }
+                    if ($idleAttempts >= $maxIdleAttempts) {
+                        break;
+                    }
+                    $i--;
+                    continue;
+                }
+
+                $seen[$fingerprint] = true;
+                $idleAttempts = 0;
 
                 $item = [
                     'body' => $message->getBody(),
@@ -65,6 +90,12 @@ class DlqService
                 }
 
                 $items[] = $item;
+
+                if ($acknowledge) {
+                    $message->getChannel()->basic_ack($message->getDeliveryTag());
+                } else {
+                    $message->getChannel()->basic_reject($message->getDeliveryTag(), true);
+                }
             }
         } finally {
             if ($channel->is_open()) {
@@ -148,5 +179,30 @@ class DlqService
                 $channel->close();
             }
         }
+    }
+
+    private function buildFingerprint(string $body, array $headers, array $properties): string
+    {
+        $messageId = $properties['message_id'] ?? null;
+        if (is_string($messageId) && $messageId !== '') {
+            return 'message_id:' . $messageId;
+        }
+
+        $normalizedHeaders = $this->normalizeHeaders($headers);
+        return 'hash:' . hash('sha256', $body . '|' . json_encode($normalizedHeaders));
+    }
+
+    private function normalizeHeaders($headers)
+    {
+        if (!is_array($headers)) {
+            return $headers;
+        }
+
+        ksort($headers);
+        foreach ($headers as $key => $value) {
+            $headers[$key] = $this->normalizeHeaders($value);
+        }
+
+        return $headers;
     }
 }

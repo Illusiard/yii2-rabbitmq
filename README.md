@@ -52,6 +52,29 @@ $rabbit->publish('Hello', 'exchange', 'route.key', [
 ]);
 ```
 
+## Semantics / Gotchas
+
+- Publisher confirms:
+  - Гарантирует, что брокер подтвердил приём публикации на уровне канала (ack/nack).
+  - НЕ гарантирует доставку consumer-у и успешную обработку сообщения.
+  - Корреляция подтверждений важна: подтверждения сопоставляются по publish sequence no + message_id.
+- mandatory + basic.return:
+  - Возникает, когда сообщение unroutable (exchange существует, но нет подходящего binding).
+  - Это отдельный класс ошибки от сетевых/канальных: публикация дошла до брокера, но была возвращена.
+- delivery_mode / persistence:
+  - Для сохранности при рестарте брокера нужны durable queue + persistent message (`delivery_mode=2`).
+  - Пакет не выставляет `delivery_mode` автоматически — задавайте его в `properties` при публикации.
+- Retry semantics:
+  - Managed retry использует заголовок `x-retry-count`; `x-death` не является источником истины.
+  - `x-retry-count` увеличивается при republish в retry-очередь.
+  - Сообщение уходит в dead при `dead` решении, иначе `reject` приводит к `basic_reject(false)`.
+- DLQ inspect semantics:
+  - `dlq-inspect` по умолчанию НЕ удаляет сообщения (`basic.get` + `nack requeue=true`).
+  - Разрушающий режим только с `--ack=1 --force=1`.
+- Consumer fail-fast semantics:
+  - Fatal исключения валят процесс (если `consumeFailFast=true`).
+  - Recoverable исключения означают неуспешную обработку (`false`) и включают retry/dead правила.
+
 ## Profiles (multi-connection)
 
 Если нужно несколько подключений, используйте `profiles` и `defaultProfile`:
@@ -305,6 +328,9 @@ $server->serve('rpc.queue', function (Envelope $request): Envelope {
 ./yii rabbitmq/dlq-inspect orders.dead --limit=10 --json=1
 ```
 
+По умолчанию `dlq-inspect` безопасен и не удаляет сообщения (requeue=true).
+Разрушающий режим включается только с `--ack=1 --force=1`.
+
 Повторная отправка после исправления ошибки:
 
 ```bash
@@ -320,8 +346,12 @@ $server->serve('rpc.queue', function (Envelope $request): Envelope {
 ## Troubleshooting / FAQ
 
 Unroutable message (mandatory/basic.return):
-- убедитесь, что exchange существует и routingKey соответствует binding
-- проверьте `mandatory=true` и логи `PUBLISH_UNROUTABLE`
+- возникает при `mandatory=true`, если нет binding для routingKey на exchange
+- это не сетевой сбой; проверьте topology и логи `PUBLISH_UNROUTABLE`
+
+Confirm timeout:
+- проверьте `publishTimeout`, network latency и нагрузку на брокер
+- timeout не означает, что сообщение не принято — смотрите confirms и return события
 
 Exchange/queue not declared:
 - выполните `rabbitmq/setup-topology` или проверьте provisioning инфраструктуры
@@ -331,6 +361,18 @@ Permissions/vhost errors:
 
 Connection refused / heartbeat timeouts:
 - проверьте доступность хоста/порта, firewall, а также `heartbeat` и таймауты
+
+Consumer exits on exception:
+- fatal исключения завершают процесс (fail-fast), recoverable возвращают `false` и запускают retry/dead
+- настройте `consumeFailFast`, `fatalExceptionClasses`, `recoverableExceptionClasses`
+
+Retry loops / attempts:
+- managed retry опирается на `x-retry-count`, увеличиваемый при republish
+- убедитесь, что политика соответствует ожидаемому числу попыток
+
+DLQ inspect shows same message:
+- `dlq-inspect` requeue=true, поэтому одно и то же сообщение видно повторно
+- при одном запуске используйте fingerprint/dedup на стороне клиента, destructive режим только с `--ack=1 --force=1`
 
 Consumer restart strategy:
 - используйте supervisor/systemd/k8s и внешние healthchecks, чтобы перезапускать consumer при ошибках

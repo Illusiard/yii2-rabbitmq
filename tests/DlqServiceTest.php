@@ -12,6 +12,81 @@ use illusiard\rabbitmq\dlq\DlqService;
 
 class DlqServiceTest extends TestCase
 {
+    public function testInspectNonDestructiveRejectsAndDoesNotAck(): void
+    {
+        $publisher = $this->createMock(PublisherInterface::class);
+        $channel = new FakeDlqChannel([]);
+        $channel->setMessages([
+            new FakeDlqMessage('m1', 'c1', null),
+        ]);
+        $channel->attachSelfToMessages();
+
+        $connection = new FakeDlqConnection($publisher, $channel);
+        $service = new RabbitMqService([
+            'connectionFactory' => function (array $config) use ($connection) {
+                unset($config);
+                return $connection;
+            },
+        ]);
+
+        $dlq = new DlqService($service);
+        $dlq->inspect('dlq.queue', 1, false);
+
+        $this->assertSame(0, $channel->acks);
+        $this->assertSame(1, $channel->rejects);
+        $this->assertTrue($channel->lastRejectRequeue);
+    }
+
+    public function testInspectDestructiveAcks(): void
+    {
+        $publisher = $this->createMock(PublisherInterface::class);
+        $channel = new FakeDlqChannel([]);
+        $channel->setMessages([
+            new FakeDlqMessage('m1', 'c1', null),
+        ]);
+        $channel->attachSelfToMessages();
+
+        $connection = new FakeDlqConnection($publisher, $channel);
+        $service = new RabbitMqService([
+            'connectionFactory' => function (array $config) use ($connection) {
+                unset($config);
+                return $connection;
+            },
+        ]);
+
+        $dlq = new DlqService($service);
+        $dlq->inspect('dlq.queue', 1, true);
+
+        $this->assertSame(1, $channel->acks);
+        $this->assertSame(0, $channel->rejects);
+    }
+
+    public function testFingerprintUsesMessageIdAndHeaderHashFallback(): void
+    {
+        $publisher = $this->createMock(PublisherInterface::class);
+        $channel = new FakeDlqChannel([]);
+        $connection = new FakeDlqConnection($publisher, $channel);
+        $service = new RabbitMqService([
+            'connectionFactory' => function (array $config) use ($connection) {
+                unset($config);
+                return $connection;
+            },
+        ]);
+
+        $dlq = new DlqService($service);
+        $method = new \ReflectionMethod(DlqService::class, 'buildFingerprint');
+        $method->setAccessible(true);
+
+        $byId = $method->invoke($dlq, 'body', [], ['message_id' => 'msg-1']);
+        $this->assertSame('message_id:msg-1', $byId);
+
+        $headersA = ['b' => 2, 'a' => 1];
+        $headersB = ['a' => 1, 'b' => 2];
+        $hashA = $method->invoke($dlq, 'body', $headersA, []);
+        $hashB = $method->invoke($dlq, 'body', $headersB, []);
+        $this->assertSame($hashA, $hashB);
+    }
+
     public function testReplayPublishesAndAcks(): void
     {
         $publisher = $this->createMock(PublisherInterface::class);
@@ -116,6 +191,8 @@ class FakeDlqConnection implements ConnectionInterface
 class FakeDlqChannel
 {
     public int $acks = 0;
+    public int $rejects = 0;
+    public bool $lastRejectRequeue = false;
     public int $purges = 0;
     public string $lastPurgeQueue = '';
     private array $messages;
@@ -153,7 +230,9 @@ class FakeDlqChannel
 
     public function basic_reject($deliveryTag, $requeue): void
     {
-        unset($deliveryTag, $requeue);
+        unset($deliveryTag);
+        $this->rejects++;
+        $this->lastRejectRequeue = (bool)$requeue;
     }
 
     public function queue_purge(string $queue): void
@@ -202,6 +281,21 @@ class FakeDlqMessage
     public function getBody(): string
     {
         return 'body-' . $this->messageId;
+    }
+
+    public function getRoutingKey(): string
+    {
+        return 'rk';
+    }
+
+    public function getExchange(): string
+    {
+        return 'ex';
+    }
+
+    public function getRedelivered(): bool
+    {
+        return false;
     }
 
     public function getChannel(): FakeDlqChannel
