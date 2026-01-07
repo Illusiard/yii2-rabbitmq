@@ -1,0 +1,10 @@
+<?php
+
+namespace illusiard\rabbitmq\message;
+
+interface MessageSerializerInterface
+{
+    public function encode(Envelope $env): string;
+
+    public function decode(string $body, array $meta = []): Envelope;
+}

@@ -13,6 +13,8 @@ use illusiard\rabbitmq\contracts\ConsumerInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;
 use illusiard\rabbitmq\retry\RetryDecider;
 use illusiard\rabbitmq\retry\RetryDecision;
+use illusiard\rabbitmq\exceptions\RabbitMqException;
+use illusiard\rabbitmq\exceptions\ErrorCode;
 
 class AmqpConsumer implements ConsumerInterface
 {
@@ -59,11 +61,12 @@ class AmqpConsumer implements ConsumerInterface
                 return;
             } catch (\Throwable $e) {
                 if (!$this->isConnectionException($e) || $attempts >= 3) {
-                    Yii::error('Consumer stopped: ' . $e->getMessage(), 'rabbitmq');
+                    $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::CONSUME_FAILED;
+                    Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
                     throw $e;
                 }
 
-                Yii::warning('Connection lost: ' . $e->getMessage(), 'rabbitmq');
+                Yii::warning(ErrorCode::CONNECTION_FAILED . ' Connection lost: ' . $e->getMessage(), 'rabbitmq');
                 $this->connection->close();
                 sleep(1);
             }
@@ -90,6 +93,7 @@ class AmqpConsumer implements ConsumerInterface
                 }
 
                 $meta = [
+                    'body' => $message->getBody(),
                     'delivery_tag' => $message->getDeliveryTag(),
                     'routing_key' => $message->getRoutingKey(),
                     'exchange' => $message->getExchange(),
@@ -101,7 +105,8 @@ class AmqpConsumer implements ConsumerInterface
                 try {
                     $result = $handler($message->getBody(), $meta);
                 } catch (\Throwable $e) {
-                    Yii::error('Handler error: ' . $e->getMessage(), 'rabbitmq');
+                    $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::HANDLER_FAILED;
+                    Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
                     $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
                     $this->cancelIfNeeded($message->getChannel(), $consumerTag);
                     if ($e instanceof \RuntimeException && $e->getMessage() === 'Memory limit exceeded.') {
@@ -178,7 +183,7 @@ class AmqpConsumer implements ConsumerInterface
     ): void {
         if ($decision->action === 'retry') {
             if (!$decision->retryQueue || !$this->retryPublisher) {
-                Yii::warning('Retry requested but publisher or retry queue is missing.', 'rabbitmq');
+                Yii::warning(ErrorCode::CONSUME_FAILED . ' Retry requested but publisher or retry queue is missing.', 'rabbitmq');
                 $reject();
                 return;
             }
@@ -191,13 +196,13 @@ class AmqpConsumer implements ConsumerInterface
 
         if ($decision->action === 'dead') {
             if ($decision->retryQueue && $this->retryPublisher) {
-                Yii::warning('Sending message to dead queue: ' . $decision->retryQueue, 'rabbitmq');
+                Yii::warning(ErrorCode::CONSUME_FAILED . ' Sending message to dead queue: ' . $decision->retryQueue, 'rabbitmq');
                 $this->republish($body, $decision->retryQueue, $meta);
                 $ack();
                 return;
             }
 
-            Yii::warning('Dead action requested but dead queue is missing.', 'rabbitmq');
+            Yii::warning(ErrorCode::CONSUME_FAILED . ' Dead action requested but dead queue is missing.', 'rabbitmq');
             $reject();
             return;
         }
@@ -212,7 +217,8 @@ class AmqpConsumer implements ConsumerInterface
             $headers = isset($meta['headers']) && is_array($meta['headers']) ? $meta['headers'] : [];
             $this->retryPublisher->publish($body, '', $queue, $properties, $headers);
         } catch (\Throwable $e) {
-            Yii::error('Republish failed: ' . $e->getMessage(), 'rabbitmq');
+            $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::PUBLISH_FAILED;
+            Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
             throw $e;
         }
     }

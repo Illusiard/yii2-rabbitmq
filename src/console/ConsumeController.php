@@ -54,7 +54,10 @@ class ConsumeController extends Controller
             Yii::info('Consumer stopped for queue: ' . $queue, 'rabbitmq');
         } catch (\Throwable $e) {
             $this->stderr($e->getMessage() . PHP_EOL);
-            Yii::error('Consumer failed: ' . $e->getMessage(), 'rabbitmq');
+            $code = $e instanceof \illusiard\rabbitmq\exceptions\RabbitMqException
+                ? $e->getErrorCode()
+                : \illusiard\rabbitmq\exceptions\ErrorCode::CONSUME_FAILED;
+            Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
             return 1;
         }
 

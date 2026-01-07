@@ -5,6 +5,8 @@ namespace illusiard\rabbitmq\amqp;
 use PhpAmqpLib\Wire\AMQPTable;
 use Yii;
 use illusiard\rabbitmq\exceptions\RabbitMqException;
+use illusiard\rabbitmq\exceptions\ErrorCode;
+use illusiard\rabbitmq\config\ConfigValidator;
 
 class TopologyManager
 {
@@ -318,101 +320,10 @@ class TopologyManager
     private function validateConfig(array $config): void
     {
         if (!is_array($config)) {
-            throw new RabbitMqException('Topology config must be an array.');
+            throw new RabbitMqException('Topology config must be an array.', ErrorCode::TOPOLOGY_INVALID);
         }
 
-        if (isset($config['main']) && !is_array($config['main'])) {
-            throw new RabbitMqException('Topology config "main" must be an array.');
-        }
-        if (isset($config['retry']) && !is_array($config['retry'])) {
-            throw new RabbitMqException('Topology config "retry" must be an array.');
-        }
-        if (isset($config['dead']) && !is_array($config['dead'])) {
-            throw new RabbitMqException('Topology config "dead" must be an array.');
-        }
-
-        $allowedExchangeTypes = ['direct', 'fanout', 'topic', 'headers'];
-
-        foreach ($config['main'] ?? [] as $index => $item) {
-            if (!is_array($item)) {
-                throw new RabbitMqException('Topology main[' . $index . '] must be an array.');
-            }
-            $this->requireString($item, 'queue', 'Topology main[' . $index . '].queue');
-            $this->requireString($item, 'exchange', 'Topology main[' . $index . '].exchange');
-            $this->requireString($item, 'routingKey', 'Topology main[' . $index . '].routingKey');
-
-            $itemOptions = $item['options'] ?? [];
-            if (isset($itemOptions['exchangeType']) && !in_array($itemOptions['exchangeType'], $allowedExchangeTypes, true)) {
-                throw new RabbitMqException('Topology main[' . $index . '].options.exchangeType must be one of: ' . implode(', ', $allowedExchangeTypes));
-            }
-            $this->validateBooleanOption($itemOptions, 'exchangeDurable', 'Topology main[' . $index . '].options.exchangeDurable');
-            $this->validateBooleanOption($itemOptions, 'exchangeAutoDelete', 'Topology main[' . $index . '].options.exchangeAutoDelete');
-            $this->validateBooleanOption($itemOptions, 'queueDurable', 'Topology main[' . $index . '].options.queueDurable');
-            $this->validateBooleanOption($itemOptions, 'queueExclusive', 'Topology main[' . $index . '].options.queueExclusive');
-            $this->validateBooleanOption($itemOptions, 'queueAutoDelete', 'Topology main[' . $index . '].options.queueAutoDelete');
-
-            if (isset($itemOptions['queueArguments']) && !is_array($itemOptions['queueArguments'])) {
-                throw new RabbitMqException('Topology main[' . $index . '].options.queueArguments must be an array.');
-            }
-            if (isset($itemOptions['deadLetterExchange']) && !is_string($itemOptions['deadLetterExchange'])) {
-                throw new RabbitMqException('Topology main[' . $index . '].options.deadLetterExchange must be a string.');
-            }
-            if (isset($itemOptions['deadLetterRoutingKey']) && !is_string($itemOptions['deadLetterRoutingKey'])) {
-                throw new RabbitMqException('Topology main[' . $index . '].options.deadLetterRoutingKey must be a string.');
-            }
-        }
-
-        foreach ($config['retry'] ?? [] as $index => $item) {
-            if (!is_array($item)) {
-                throw new RabbitMqException('Topology retry[' . $index . '] must be an array.');
-            }
-            $this->requireString($item, 'queue', 'Topology retry[' . $index . '].queue');
-            $this->requireInt($item, 'ttlMs', 'Topology retry[' . $index . '].ttlMs');
-            $this->requireString($item, 'deadLetterExchange', 'Topology retry[' . $index . '].deadLetterExchange');
-            $this->requireString($item, 'deadLetterRoutingKey', 'Topology retry[' . $index . '].deadLetterRoutingKey');
-
-            if ((int)$item['ttlMs'] <= 0) {
-                throw new RabbitMqException('Topology retry[' . $index . '].ttlMs must be greater than 0.');
-            }
-        }
-
-        foreach ($config['dead'] ?? [] as $index => $item) {
-            if (!is_array($item)) {
-                throw new RabbitMqException('Topology dead[' . $index . '] must be an array.');
-            }
-            $this->requireString($item, 'queue', 'Topology dead[' . $index . '].queue');
-        }
-
-        $options = $config['options'] ?? [];
-        if (isset($options['retryExchange']) && !is_string($options['retryExchange'])) {
-            throw new RabbitMqException('Topology options.retryExchange must be a string.');
-        }
-        if (isset($options['retryExchangeType']) && !in_array($options['retryExchangeType'], $allowedExchangeTypes, true)) {
-            throw new RabbitMqException('Topology options.retryExchangeType must be one of: ' . implode(', ', $allowedExchangeTypes));
-        }
-        $this->validateBooleanOption($options, 'retryExchangeDurable', 'Topology options.retryExchangeDurable');
-        $this->validateBooleanOption($options, 'strict', 'Topology options.strict');
-        $this->validateBooleanOption($options, 'dryRun', 'Topology options.dryRun');
-    }
-
-    private function requireString(array $item, string $key, string $path): void
-    {
-        if (!isset($item[$key]) || !is_string($item[$key]) || $item[$key] === '') {
-            throw new RabbitMqException($path . ' must be a non-empty string.');
-        }
-    }
-
-    private function requireInt(array $item, string $key, string $path): void
-    {
-        if (!isset($item[$key]) || !is_int($item[$key])) {
-            throw new RabbitMqException($path . ' must be an integer.');
-        }
-    }
-
-    private function validateBooleanOption(array $options, string $key, string $path): void
-    {
-        if (isset($options[$key]) && !is_bool($options[$key])) {
-            throw new RabbitMqException($path . ' must be a boolean.');
-        }
+        $validator = new ConfigValidator();
+        $validator->validateTopology($config);
     }
 }

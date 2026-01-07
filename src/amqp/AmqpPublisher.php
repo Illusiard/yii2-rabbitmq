@@ -9,6 +9,7 @@ use PhpAmqpLib\Wire\AMQPTable;
 use Yii;
 use illusiard\rabbitmq\contracts\PublisherInterface;
 use illusiard\rabbitmq\exceptions\PublishException;
+use illusiard\rabbitmq\exceptions\ErrorCode;
 
 class AmqpPublisher implements PublisherInterface
 {
@@ -17,9 +18,8 @@ class AmqpPublisher implements PublisherInterface
     private bool $confirm;
     private bool $mandatory;
     private int $publishTimeout;
-    private bool $acked = false;
-    private bool $nacked = false;
-    private ?array $returned = null;
+    private PublishConfirmTracker $tracker;
+    private ?array $uncorrelatedReturn = null;
 
     public function __construct(AmqpConnection $connection, array $config = [])
     {
@@ -27,6 +27,7 @@ class AmqpPublisher implements PublisherInterface
         $this->confirm = (bool)($config['confirm'] ?? false);
         $this->mandatory = (bool)($config['mandatory'] ?? false);
         $this->publishTimeout = (int)($config['publishTimeout'] ?? 5);
+        $this->tracker = new PublishConfirmTracker();
     }
 
     public function publish(
@@ -40,36 +41,47 @@ class AmqpPublisher implements PublisherInterface
             $properties['application_headers'] = new AMQPTable($headers);
         }
 
+        if (!isset($properties['message_id']) || $properties['message_id'] === '') {
+            $properties['message_id'] = $this->generateMessageId();
+        }
+
+        $messageId = (string)$properties['message_id'];
+        $correlationId = isset($properties['correlation_id']) ? (string)$properties['correlation_id'] : null;
         $message = new AMQPMessage($body, $properties);
-        $this->resetPublishState();
 
         $channel = $this->getChannel();
+        $seqNo = null;
+        $shouldTrack = $this->confirm || $this->mandatory;
+        if ($shouldTrack) {
+            $seqNo = $this->resolvePublishSeqNo($channel);
+            $this->tracker->register($seqNo, $messageId, microtime(true));
+        }
 
         try {
             $channel->basic_publish($message, $exchange, $routingKey, $this->mandatory);
         } catch (\Throwable $e) {
-            $this->resetChannel();
-            throw new PublishException('Publish failed: ' . $e->getMessage(), 0, $e);
-        }
-
-        if ($this->confirm || $this->mandatory) {
-            $this->waitForPublish($channel);
-        }
-
-        if ($this->returned !== null) {
-            Yii::warning(
-                'Message returned: ' . $this->returned['reply_code'] . ' ' . $this->returned['reply_text'],
-                'rabbitmq'
-            );
-            throw new PublishException('Message was returned by broker (unroutable).');
-        }
-
-        if ($this->confirm) {
-            if ($this->nacked) {
-                throw new PublishException('Message was NACKed by broker.');
+            if ($seqNo !== null) {
+                $this->tracker->remove($seqNo);
             }
-            if (!$this->acked) {
-                throw new PublishException('Publish confirm timeout after ' . $this->publishTimeout . ' seconds.');
+            $this->resetChannel();
+            $this->logPublishError(
+                ErrorCode::PUBLISH_FAILED,
+                'Publish failed: ' . $e->getMessage(),
+                $messageId,
+                $correlationId,
+                $exchange,
+                $routingKey
+            );
+            throw new PublishException('Publish failed: ' . $e->getMessage(), ErrorCode::PUBLISH_FAILED, 0, $e);
+        }
+
+        try {
+            if ($shouldTrack && $seqNo !== null) {
+                $this->waitForPublish($channel, $seqNo, $messageId, $correlationId, $exchange, $routingKey);
+            }
+        } finally {
+            if ($seqNo !== null) {
+                $this->tracker->remove($seqNo);
             }
         }
     }
@@ -80,40 +92,84 @@ class AmqpPublisher implements PublisherInterface
             return $this->channel;
         }
 
+        if ($this->tracker->count() > 0) {
+            Yii::warning('Publish channel was reset with inflight messages; clearing pending confirms.', 'rabbitmq');
+            $this->tracker->clear();
+        }
+        $this->uncorrelatedReturn = null;
+
         $this->channel = $this->connection->getAmqpConnection()->channel();
 
+        $this->installChannelListeners($this->channel);
+
+        return $this->channel;
+    }
+
+    private function resetChannel(): void
+    {
+        if ($this->channel !== null && $this->channel->is_open()) {
+            $this->channel->close();
+        }
+        $this->channel = null;
+    }
+
+    private function installChannelListeners(AMQPChannel $channel): void
+    {
         if ($this->confirm) {
-            $this->channel->confirm_select();
-            $this->channel->set_ack_handler(function () {
-                $this->acked = true;
+            $channel->confirm_select();
+            $channel->set_ack_handler(function ($deliveryTag, $multiple) {
+                $this->tracker->markAck((int)$deliveryTag, (bool)$multiple);
             });
-            $this->channel->set_nack_handler(function () {
-                $this->nacked = true;
+            $channel->set_nack_handler(function ($deliveryTag, $multiple) {
+                $this->tracker->markNack((int)$deliveryTag, (bool)$multiple);
             });
         }
 
         if ($this->mandatory) {
-            $this->channel->set_return_listener(function (
+            $channel->set_return_listener(function (
                 $replyCode,
                 $replyText,
                 $exchange,
                 $routingKey,
                 $message
             ) {
-                $this->returned = [
+                $returnInfo = [
                     'reply_code' => $replyCode,
                     'reply_text' => $replyText,
                     'exchange' => $exchange,
                     'routing_key' => $routingKey,
                 ];
+
+                $messageId = $this->resolveMessageId($message);
+                if ($messageId === null || $messageId === '') {
+                    $this->uncorrelatedReturn = $returnInfo;
+                    Yii::warning(
+                        ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED . ' Message returned without message_id.',
+                        'rabbitmq'
+                    );
+                    return;
+                }
+
+                $seqNo = $this->tracker->markReturned($messageId, $returnInfo);
+                if ($seqNo === null) {
+                    $this->uncorrelatedReturn = $returnInfo;
+                    Yii::warning(
+                        ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED . ' Message returned but not found in inflight map.',
+                        'rabbitmq'
+                    );
+                }
             });
         }
-
-        return $this->channel;
     }
 
-    private function waitForPublish(AMQPChannel $channel): void
-    {
+    private function waitForPublish(
+        AMQPChannel $channel,
+        int $seqNo,
+        string $messageId,
+        ?string $correlationId,
+        string $exchange,
+        string $routingKey
+    ): void {
         $deadline = microtime(true) + max(0, $this->publishTimeout);
 
         while (microtime(true) < $deadline) {
@@ -132,27 +188,119 @@ class AmqpPublisher implements PublisherInterface
                 break;
             }
 
-            if ($this->returned !== null) {
-                return;
+            $state = $this->tracker->get($seqNo);
+            if ($this->uncorrelatedReturn !== null) {
+                $this->uncorrelatedReturn = null;
+                $this->logPublishError(
+                    ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED,
+                    'Publish failed: unroutable return could not be correlated.',
+                    $messageId,
+                    $correlationId,
+                    $exchange,
+                    $routingKey
+                );
+                throw new PublishException(
+                    'Message was returned by broker but could not be correlated.',
+                    ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED
+                );
             }
-            if ($this->confirm && ($this->acked || $this->nacked)) {
+            if ($state !== null && $state['returned']) {
+                $this->logPublishError(
+                    ErrorCode::PUBLISH_UNROUTABLE,
+                    'Publish failed: message was returned by broker.',
+                    $messageId,
+                    $correlationId,
+                    $exchange,
+                    $routingKey
+                );
+                throw new PublishException('Message was returned by broker (unroutable).', ErrorCode::PUBLISH_UNROUTABLE);
+            }
+            if ($this->confirm && $state !== null && $state['nacked']) {
+                $this->logPublishError(
+                    ErrorCode::PUBLISH_NACK,
+                    'Publish failed: message was NACKed by broker.',
+                    $messageId,
+                    $correlationId,
+                    $exchange,
+                    $routingKey
+                );
+                throw new PublishException('Message was NACKed by broker.', ErrorCode::PUBLISH_NACK);
+            }
+            if ($this->confirm && $state !== null && $state['acked']) {
                 return;
             }
         }
-    }
 
-    private function resetPublishState(): void
-    {
-        $this->acked = false;
-        $this->nacked = false;
-        $this->returned = null;
-    }
-
-    private function resetChannel(): void
-    {
-        if ($this->channel !== null && $this->channel->is_open()) {
-            $this->channel->close();
+        if ($this->confirm) {
+            $this->logPublishError(
+                ErrorCode::PUBLISH_TIMEOUT,
+                'Publish confirm timeout after ' . $this->publishTimeout . ' seconds.',
+                $messageId,
+                $correlationId,
+                $exchange,
+                $routingKey
+            );
+            throw new PublishException(
+                'Publish confirm timeout after ' . $this->publishTimeout . ' seconds.',
+                ErrorCode::PUBLISH_TIMEOUT
+            );
         }
-        $this->channel = null;
+    }
+
+    private function resolvePublishSeqNo(AMQPChannel $channel): int
+    {
+        if ($this->confirm && method_exists($channel, 'get_next_publish_seq_no')) {
+            return (int)$channel->get_next_publish_seq_no();
+        }
+
+        return $this->tracker->nextLocalSeqNo();
+    }
+
+    private function resolveMessageId($message): ?string
+    {
+        if (is_object($message)) {
+            if (method_exists($message, 'get')) {
+                $value = $message->get('message_id');
+                if (is_string($value) && $value !== '') {
+                    return $value;
+                }
+            }
+
+            if (method_exists($message, 'get_properties')) {
+                $properties = $message->get_properties();
+                if (is_array($properties) && isset($properties['message_id']) && is_string($properties['message_id'])) {
+                    return $properties['message_id'];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function generateMessageId(): string
+    {
+        try {
+            return bin2hex(random_bytes(16));
+        } catch (\Throwable $e) {
+            return uniqid('msg_', true);
+        }
+    }
+
+    private function logPublishError(
+        string $code,
+        string $message,
+        ?string $messageId,
+        ?string $correlationId,
+        string $exchange,
+        string $routingKey
+    ): void {
+        Yii::error(
+            $code . ' ' . $message
+            . ' message_id=' . ($messageId ?? '')
+            . ' correlation_id=' . ($correlationId ?? '')
+            . ' exchange=' . $exchange
+            . ' routingKey=' . $routingKey,
+            'rabbitmq'
+        );
     }
 }
