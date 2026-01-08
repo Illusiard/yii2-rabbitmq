@@ -77,7 +77,7 @@ class AmqpConsumer implements ConsumerInterface
     private function consumeOnce(string $queue, callable $handler, int $prefetch): void
     {
         $channel = $this->connection->getAmqpConnection()->channel();
-        $channel->basic_qos(null, $prefetch, null);
+        $channel->basic_qos(0, $prefetch, null);
 
         $consumerTag = $channel->basic_consume(
             $queue,
@@ -98,7 +98,7 @@ class AmqpConsumer implements ConsumerInterface
                     'delivery_tag' => $message->getDeliveryTag(),
                     'routing_key' => $message->getRoutingKey(),
                     'exchange' => $message->getExchange(),
-                    'redelivered' => $message->getRedelivered(),
+                    'redelivered' => (bool)($message->delivery_info['redelivered'] ?? false),
                     'headers' => $headers,
                     'properties' => $properties,
                 ];

@@ -2,6 +2,7 @@
 
 namespace illusiard\rabbitmq\rpc;
 
+use illusiard\rabbitmq\amqp\AmqpConnection;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Wire\AMQPTable;
 use illusiard\rabbitmq\components\RabbitMqService;
@@ -22,13 +23,15 @@ class RpcClient
 
     public function call(Envelope $request, string $exchange, string $routingKey, int $timeoutSec = 5): Envelope
     {
+        /** @var AmqpConnection $connection */
         $connection = $this->service->getConnection();
-        if (!method_exists($connection, 'getAmqpConnection')) {
-            throw new RabbitMqException('RPC requires AMQP connection.', ErrorCode::CONNECTION_FAILED);
+        $amqpConnection = $connection->getAmqpConnection();
+        if (!$amqpConnection->isConnected()) {
+            throw new RabbitMqException('Dead connection.', ErrorCode::CONNECTION_FAILED);
         }
 
         try {
-            $channel = $connection->getAmqpConnection()->channel();
+            $channel = $amqpConnection->channel();
             $queueData = $channel->queue_declare('', false, false, true, true);
             $replyQueue = is_array($queueData) ? (string)$queueData[0] : '';
         } catch (\Throwable $e) {
@@ -46,8 +49,6 @@ class RpcClient
             ->withProperty('correlation_id', $correlationId);
 
         $response = null;
-        $consumerTag = null;
-
         $consumerTag = $channel->basic_consume(
             $replyQueue,
             '',

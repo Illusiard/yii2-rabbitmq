@@ -21,8 +21,8 @@ class HealthcheckController extends Controller
         $rabbit = Yii::$app->get('rabbitmq');
 
         try {
-            if (!empty($rabbit->profiles)) {
-                $rabbit = $rabbit->forProfile($this->profile);
+            if (!empty($rabbit?->profiles)) {
+                $rabbit = $rabbit?->forProfile($this->profile);
             }
         } catch (\Throwable $e) {
             return $this->renderResult(false, $e->getMessage());

@@ -2,6 +2,8 @@
 
 namespace illusiard\rabbitmq\amqp;
 
+use illusiard\rabbitmq\exceptions\ErrorCode;
+use illusiard\rabbitmq\exceptions\RabbitMqException;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use illusiard\rabbitmq\contracts\ConnectionInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;

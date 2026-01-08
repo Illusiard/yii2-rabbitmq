@@ -72,7 +72,7 @@ class DlqService
                     'meta' => [
                         'routing_key' => $message->getRoutingKey(),
                         'exchange' => $message->getExchange(),
-                        'redelivered' => $message->getRedelivered(),
+                        'redelivered' => (bool)($message->delivery_info['redelivered'] ?? false),
                         'x-death' => $headers['x-death'] ?? null,
                     ],
                 ];

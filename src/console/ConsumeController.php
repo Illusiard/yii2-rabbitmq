@@ -43,7 +43,7 @@ class ConsumeController extends Controller
                 return $handlerInstance($body, $meta);
             };
 
-            $consumer = $rabbit->getConnection()->getConsumer();
+            $consumer = $rabbit?->getConnection()->getConsumer();
             if ($consumer instanceof AmqpConsumer) {
                 $consumer->setStopChecker(function () use (&$shutdownRequested) {
                     return $shutdownRequested;

@@ -113,15 +113,49 @@ class AmqpPublisher implements PublisherInterface
         $this->channel = null;
     }
 
+    //костыль из-за разных версий библиотек
+    private function normalizeConfirmTag($arg): int
+    {
+        if (is_int($arg)) {
+            return $arg;
+        }
+        if (is_string($arg) && ctype_digit($arg)) {
+            return (int)$arg;
+        }
+
+        if ($arg instanceof AMQPMessage) {
+            $messageId = null;
+
+            try {
+                $messageId = $arg->get('message_id');
+            } catch (\Throwable $e) {
+                // ignore
+            }
+
+            if ($messageId) {
+                $seqNo = $this->tracker->findSeqNoByMessageId((string)$messageId);
+                if ($seqNo !== null) {
+                    return $seqNo;
+                }
+            }
+
+            throw new \RuntimeException('Confirm callback passed AMQPMessage without correlatable message_id.');
+        }
+
+        throw new \RuntimeException('Unexpected confirm callback argument type: ' . (is_object($arg) ? get_class($arg) : gettype($arg)));
+    }
+
     private function installChannelListeners(AMQPChannel $channel): void
     {
         if ($this->confirm) {
             $channel->confirm_select();
-            $channel->set_ack_handler(function ($deliveryTag, $multiple) {
-                $this->tracker->markAck((int)$deliveryTag, (bool)$multiple);
+            $channel->set_ack_handler(function ($arg, $multiple = false) {
+                $seqNo = $this->normalizeConfirmTag($arg);
+                $this->tracker->markAck($seqNo, (bool)$multiple);
             });
-            $channel->set_nack_handler(function ($deliveryTag, $multiple) {
-                $this->tracker->markNack((int)$deliveryTag, (bool)$multiple);
+            $channel->set_nack_handler(function ($arg, $multiple = false) {
+                $seqNo = $this->normalizeConfirmTag($arg);
+                $this->tracker->markNack($seqNo, (bool)$multiple);
             });
         }
 

@@ -2,6 +2,8 @@
 
 namespace illusiard\rabbitmq\rpc;
 
+use Closure;
+use illusiard\rabbitmq\amqp\AmqpConnection;
 use PhpAmqpLib\Wire\AMQPTable;
 use Yii;
 use illusiard\rabbitmq\components\RabbitMqService;
@@ -11,6 +13,8 @@ use illusiard\rabbitmq\exceptions\ErrorCode;
 
 class RpcServer
 {
+    private ?Closure $onStart = null;
+
     private RabbitMqService $service;
 
     public function __construct(RabbitMqService $service)
@@ -28,13 +32,14 @@ class RpcServer
             throw new \InvalidArgumentException('Handler must be callable and return Envelope.');
         }
 
+        /** @var AmqpConnection $connection */
         $connection = $this->service->getConnection();
-        if (!method_exists($connection, 'getAmqpConnection')) {
-            throw new RabbitMqException('RPC requires AMQP connection.', ErrorCode::CONNECTION_FAILED);
+        $amqpConnection = $connection->getAmqpConnection();
+        if (!$amqpConnection->isConnected()) {
+            throw new RabbitMqException('Dead connection.', ErrorCode::CONNECTION_FAILED);
         }
 
-        $channel = $connection->getAmqpConnection()->channel();
-
+        $channel = $amqpConnection->channel();
         $channel->basic_consume(
             $queue,
             '',
@@ -86,6 +91,10 @@ class RpcServer
 
         try {
             while ($channel->is_consuming()) {
+                if ($this->onStart) {
+                    ($this->onStart)();
+                    $this->onStart = null;
+                }
                 $channel->wait();
             }
         } finally {
@@ -93,5 +102,10 @@ class RpcServer
                 $channel->close();
             }
         }
+    }
+
+    public function setOnStart(Closure $param): void
+    {
+        $this->onStart = $param;
     }
 }

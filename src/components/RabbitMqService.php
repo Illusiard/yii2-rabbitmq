@@ -2,6 +2,7 @@
 
 namespace illusiard\rabbitmq\components;
 
+use illusiard\rabbitmq\amqp\AmqpConsumer;
 use Yii;
 use yii\base\Component;
 use illusiard\rabbitmq\amqp\AmqpConnection;
@@ -24,41 +25,41 @@ use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
 
 class RabbitMqService extends Component
 {
-    public string $host = '127.0.0.1';
-    public int $port = 5672;
-    public string $user = 'guest';
-    public string $password = 'guest';
-    public string $vhost = '/';
-    public int $heartbeat = 30;
-    public int $readWriteTimeout = 3;
-    public int $connectionTimeout = 3;
-    public ?array $ssl = null;
-    public array $topology = [];
-    public bool $confirm = false;
-    public bool $mandatory = false;
-    public int $publishTimeout = 5;
-    public bool $managedRetry = false;
-    public array $retryPolicy = [];
-    public array $profiles = [];
-    public string $defaultProfile = 'default';
-    public $serializer = JsonMessageSerializer::class;
-    public array $publishMiddlewares = [];
-    public array $consumeMiddlewares = [];
-    public bool $consumeFailFast = true;
-    public array $fatalExceptionClasses = [];
-    public array $recoverableExceptionClasses = [];
-    public ?string $componentId = null;
+    public string  $host                        = '127.0.0.1';
+    public int     $port                        = 5672;
+    public string  $user                        = 'guest';
+    public string  $password                    = 'guest';
+    public string  $vhost                       = '/';
+    public int     $heartbeat                   = 30;
+    public int     $readWriteTimeout            = 3;
+    public int     $connectionTimeout           = 3;
+    public ?array  $ssl                         = null;
+    public array   $topology                    = [];
+    public bool    $confirm                     = false;
+    public bool    $mandatory                   = false;
+    public int     $publishTimeout              = 5;
+    public bool    $managedRetry                = false;
+    public array   $retryPolicy                 = [];
+    public array   $profiles                    = [];
+    public string  $defaultProfile              = 'default';
+    public         $serializer                  = JsonMessageSerializer::class;
+    public array   $publishMiddlewares          = [];
+    public array   $consumeMiddlewares          = [];
+    public bool    $consumeFailFast             = true;
+    public array   $fatalExceptionClasses       = [];
+    public array   $recoverableExceptionClasses = [];
+    public ?string $componentId                 = null;
 
     /** @var callable|null */
     public $connectionFactory;
 
-    private ?ConnectionInterface $connection = null;
-    private ?PublisherInterface $publisher = null;
+    private ?ConnectionInterface        $connection         = null;
+    private ?PublisherInterface         $publisher          = null;
     private ?MessageSerializerInterface $serializerInstance = null;
-    private ?PublishPipeline $publishPipeline = null;
-    private ?ConsumePipeline $consumePipeline = null;
-    private ?string $activeProfile = null;
-    private ?string $lastError = null;
+    private ?PublishPipeline            $publishPipeline    = null;
+    private ?ConsumePipeline            $consumePipeline    = null;
+    private ?string                     $activeProfile      = null;
+    private ?string                     $lastError          = null;
 
     public function init()
     {
@@ -66,30 +67,30 @@ class RabbitMqService extends Component
 
         try {
             $validator = new ConfigValidator();
-            $config = [
-                'amqp' => [
-                    'host' => $this->host,
-                    'port' => $this->port,
-                    'user' => $this->user,
-                    'password' => $this->password,
-                    'vhost' => $this->vhost,
-                    'heartbeat' => $this->heartbeat,
-                    'readWriteTimeout' => $this->readWriteTimeout,
+            $config    = [
+                'amqp'                        => [
+                    'host'              => $this->host,
+                    'port'              => $this->port,
+                    'user'              => $this->user,
+                    'password'          => $this->password,
+                    'vhost'             => $this->vhost,
+                    'heartbeat'         => $this->heartbeat,
+                    'readWriteTimeout'  => $this->readWriteTimeout,
                     'connectionTimeout' => $this->connectionTimeout,
-                    'confirm' => $this->confirm,
-                    'mandatory' => $this->mandatory,
-                    'publishTimeout' => $this->publishTimeout,
+                    'confirm'           => $this->confirm,
+                    'mandatory'         => $this->mandatory,
+                    'publishTimeout'    => $this->publishTimeout,
                 ],
-                'topology' => $this->topology,
-                'publishMiddlewares' => $this->publishMiddlewares,
-                'consumeMiddlewares' => $this->consumeMiddlewares,
-                'consumeFailFast' => $this->consumeFailFast,
-                'fatalExceptionClasses' => $this->fatalExceptionClasses,
+                'topology'                    => $this->topology,
+                'publishMiddlewares'          => $this->publishMiddlewares,
+                'consumeMiddlewares'          => $this->consumeMiddlewares,
+                'consumeFailFast'             => $this->consumeFailFast,
+                'fatalExceptionClasses'       => $this->fatalExceptionClasses,
                 'recoverableExceptionClasses' => $this->recoverableExceptionClasses,
             ];
 
             if (!empty($this->profiles)) {
-                $config['profiles'] = $this->profiles;
+                $config['profiles']       = $this->profiles;
                 $config['defaultProfile'] = $this->defaultProfile;
             }
 
@@ -97,17 +98,22 @@ class RabbitMqService extends Component
         } catch (RabbitMqException $e) {
             throw $e;
         } catch (\Throwable $e) {
-            throw new RabbitMqException('Config validation failed: ' . $e->getMessage(), ErrorCode::CONFIG_INVALID, 0, $e);
+            throw new RabbitMqException(
+                'Config validation failed: ' . $e->getMessage(),
+                ErrorCode::CONFIG_INVALID,
+                0,
+                $e
+            );
         }
     }
+
     public function publish(
         string $body,
         string $exchange = '',
         string $routingKey = '',
         array $properties = [],
         array $headers = []
-    ): void
-    {
+    ): void {
         try {
             $this->getPublisher()->publish($body, $exchange, $routingKey, $properties, $headers);
         } catch (ConnectionException $e) {
@@ -121,8 +127,9 @@ class RabbitMqService extends Component
 
     public function forProfile(string $name): self
     {
-        $clone = clone $this;
+        $clone                = clone $this;
         $clone->activeProfile = $name;
+
         return $clone;
     }
 
@@ -132,7 +139,7 @@ class RabbitMqService extends Component
 
         $this->getPublishPipeline()->run($env, $context, function (Envelope $env) use ($exchange, $routingKey) {
             $serializer = $this->getSerializer();
-            $body = $serializer->encode($env);
+            $body       = $serializer->encode($env);
 
             $properties = $env->getProperties();
             unset($properties['application_headers']);
@@ -180,8 +187,12 @@ class RabbitMqService extends Component
         });
     }
 
-    public function publishJson(mixed $payload, string $exchange = '', string $routingKey = '', array $options = []): void
-    {
+    public function publishJson(
+        mixed $payload,
+        string $exchange = '',
+        string $routingKey = '',
+        array $options = []
+    ): void {
         $env = new Envelope(
             $payload,
             $options['headers'] ?? [],
@@ -223,8 +234,8 @@ class RabbitMqService extends Component
             throw new \InvalidArgumentException('Handler must be callable via __invoke.');
         }
 
-        $context = $this->buildConsumeContext($queue, $handlerFqcn);
-        $pipeline = $this->getConsumePipeline();
+        $context        = $this->buildConsumeContext($queue, $handlerFqcn);
+        $pipeline       = $this->getConsumePipeline();
         $wrappedHandler = function (string $body, array $meta) use ($handler, $pipeline, $context) {
             return $pipeline->run($body, $meta, $context, function (string $body, array $meta) use ($handler) {
                 return $handler($body, $meta);
@@ -232,7 +243,7 @@ class RabbitMqService extends Component
         };
 
         $consumer = $this->ensureConnection()->getConsumer();
-        if ($consumer instanceof \illusiard\rabbitmq\amqp\AmqpConsumer) {
+        if ($consumer instanceof AmqpConsumer) {
             $consumer->setManagedRetry($this->managedRetry, $this->retryPolicy, $this->getPublisher());
         }
 
@@ -254,12 +265,12 @@ class RabbitMqService extends Component
     public function ping(int $timeout = 3): bool
     {
         $this->lastError = null;
-        $connection = null;
+        $connection      = null;
 
         try {
-            $config = $this->getConnectionConfig();
+            $config                      = $this->getConnectionConfig();
             $config['connectionTimeout'] = $timeout;
-            $config['readWriteTimeout'] = $timeout;
+            $config['readWriteTimeout']  = $timeout;
 
             $connection = $this->buildConnectionForPing($config);
             $connection->connect();
@@ -280,6 +291,7 @@ class RabbitMqService extends Component
             return true;
         } catch (\Throwable $e) {
             $this->lastError = $this->formatError($e);
+
             return false;
         } finally {
             if ($connection instanceof ConnectionInterface) {
@@ -304,7 +316,12 @@ class RabbitMqService extends Component
             try {
                 $connection->connect();
             } catch (\Throwable $e) {
-                throw new ConnectionException('Connection failed: ' . $e->getMessage(), ErrorCode::CONNECTION_FAILED, 0, $e);
+                throw new ConnectionException(
+                    'Connection failed: ' . $e->getMessage(),
+                    ErrorCode::CONNECTION_FAILED,
+                    0,
+                    $e
+                );
             }
         }
 
@@ -326,6 +343,7 @@ class RabbitMqService extends Component
     {
         if (is_callable($this->connectionFactory)) {
             $factory = $this->connectionFactory;
+
             return $factory($config);
         }
 
@@ -335,6 +353,7 @@ class RabbitMqService extends Component
     private function formatError(\Throwable $e): string
     {
         $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::GENERIC;
+
         return $code . ' ' . get_class($e) . ': ' . $e->getMessage();
     }
 
@@ -346,10 +365,12 @@ class RabbitMqService extends Component
 
         if ($this->serializer instanceof MessageSerializerInterface) {
             $this->serializerInstance = $this->serializer;
+
             return $this->serializerInstance;
         }
 
         $this->serializerInstance = Yii::createObject($this->serializer);
+
         return $this->serializerInstance;
     }
 
@@ -359,8 +380,10 @@ class RabbitMqService extends Component
             return $this->publishPipeline;
         }
 
-        $middlewares = $this->resolveMiddlewares($this->publishMiddlewares, PublishMiddlewareInterface::class);
+        $middlewares           =
+            $this->resolveMiddlewares($this->publishMiddlewares, PublishMiddlewareInterface::class);
         $this->publishPipeline = new PublishPipeline($middlewares);
+
         return $this->publishPipeline;
     }
 
@@ -370,13 +393,15 @@ class RabbitMqService extends Component
             return $this->consumePipeline;
         }
 
-        $middlewares = $this->resolveMiddlewares($this->consumeMiddlewares, ConsumeMiddlewareInterface::class);
-        $classifier = new ExceptionClassifier(
+        $middlewares           =
+            $this->resolveMiddlewares($this->consumeMiddlewares, ConsumeMiddlewareInterface::class);
+        $classifier            = new ExceptionClassifier(
             $this->consumeFailFast,
             $this->fatalExceptionClasses,
             $this->recoverableExceptionClasses
         );
         $this->consumePipeline = new ConsumePipeline($middlewares, $classifier);
+
         return $this->consumePipeline;
     }
 
@@ -403,42 +428,42 @@ class RabbitMqService extends Component
     private function buildPublishContext(string $exchange, string $routingKey): array
     {
         return [
-            'exchange' => $exchange,
-            'routingKey' => $routingKey,
-            'queue' => null,
+            'exchange'     => $exchange,
+            'routingKey'   => $routingKey,
+            'queue'        => null,
             'handlerClass' => null,
-            'componentId' => $this->componentId,
-            'timestamp' => time(),
+            'componentId'  => $this->componentId,
+            'timestamp'    => time(),
         ];
     }
 
     private function buildConsumeContext(string $queue, ?string $handlerClass): array
     {
         return [
-            'exchange' => null,
-            'routingKey' => null,
-            'queue' => $queue,
+            'exchange'     => null,
+            'routingKey'   => null,
+            'queue'        => $queue,
             'handlerClass' => $handlerClass,
-            'componentId' => $this->componentId,
-            'timestamp' => time(),
+            'componentId'  => $this->componentId,
+            'timestamp'    => time(),
         ];
     }
 
     private function getConnectionConfig(): array
     {
         $base = [
-            'host' => $this->host,
-            'port' => $this->port,
-            'user' => $this->user,
-            'password' => $this->password,
-            'vhost' => $this->vhost,
-            'heartbeat' => $this->heartbeat,
-            'readWriteTimeout' => $this->readWriteTimeout,
+            'host'              => $this->host,
+            'port'              => $this->port,
+            'user'              => $this->user,
+            'password'          => $this->password,
+            'vhost'             => $this->vhost,
+            'heartbeat'         => $this->heartbeat,
+            'readWriteTimeout'  => $this->readWriteTimeout,
             'connectionTimeout' => $this->connectionTimeout,
-            'ssl' => $this->ssl,
-            'confirm' => $this->confirm,
-            'mandatory' => $this->mandatory,
-            'publishTimeout' => $this->publishTimeout,
+            'ssl'               => $this->ssl,
+            'confirm'           => $this->confirm,
+            'mandatory'         => $this->mandatory,
+            'publishTimeout'    => $this->publishTimeout,
         ];
 
         if (empty($this->profiles)) {
@@ -464,16 +489,17 @@ class RabbitMqService extends Component
         }
 
         $keys = array_keys($this->profiles);
+
         return (string)reset($keys);
     }
 
     public function __clone()
     {
-        $this->connection = null;
-        $this->publisher = null;
+        $this->connection         = null;
+        $this->publisher          = null;
         $this->serializerInstance = null;
-        $this->publishPipeline = null;
-        $this->consumePipeline = null;
-        $this->lastError = null;
+        $this->publishPipeline    = null;
+        $this->consumePipeline    = null;
+        $this->lastError          = null;
     }
 }

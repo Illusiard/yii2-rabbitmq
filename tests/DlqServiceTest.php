@@ -9,6 +9,7 @@ use illusiard\rabbitmq\contracts\ConnectionInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;
 use illusiard\rabbitmq\contracts\ConsumerInterface;
 use illusiard\rabbitmq\dlq\DlqService;
+use ReflectionMethod;
 
 class DlqServiceTest extends TestCase
 {
@@ -74,7 +75,7 @@ class DlqServiceTest extends TestCase
         ]);
 
         $dlq = new DlqService($service);
-        $method = new \ReflectionMethod(DlqService::class, 'buildFingerprint');
+        $method = new ReflectionMethod(DlqService::class, 'buildFingerprint');
         $method->setAccessible(true);
 
         $byId = $method->invoke($dlq, 'body', [], ['message_id' => 'msg-1']);

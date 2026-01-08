@@ -108,4 +108,9 @@ class PublishConfirmTracker
             $this->inflight[$deliveryTag] = $updater($this->inflight[$deliveryTag]);
         }
     }
+
+    public function findSeqNoByMessageId(string $messageId): ?string
+    {
+        return $this->messageIdToSeq[$messageId] ?? null;
+    }
 }
