@@ -32,4 +32,87 @@ class JsonMessageSerializerTest extends TestCase
         $this->expectException(RabbitMqException::class);
         $serializer->decode('{invalid json}');
     }
+
+    public function testDecodePlainJsonObjectPreservesPayload(): void
+    {
+        $serializer = new JsonMessageSerializer();
+
+        $payload = ['foo' => 'bar', 'count' => 2];
+        $body = json_encode($payload);
+
+        $decoded = $serializer->decode($body);
+
+        $this->assertSame($payload, $decoded->getPayload());
+    }
+
+    public function testDecodePlainJsonArrayPreservesPayload(): void
+    {
+        $serializer = new JsonMessageSerializer();
+
+        $payload = [1, 2, 3];
+        $body = json_encode($payload);
+
+        $decoded = $serializer->decode($body);
+
+        $this->assertSame($payload, $decoded->getPayload());
+    }
+
+    public function testDecodeEnvelopeJsonWithMessageId(): void
+    {
+        $serializer = new JsonMessageSerializer();
+
+        $payload = ['a' => 1];
+        $body = json_encode([
+            'payload' => $payload,
+            'messageId' => 'msg-1',
+        ]);
+
+        $decoded = $serializer->decode($body);
+
+        $this->assertSame('msg-1', $decoded->getMessageId());
+        $this->assertSame($payload, $decoded->getPayload());
+    }
+
+    public function testDecodeEnvelopeJsonWithMessageIdSnakeCase(): void
+    {
+        $serializer = new JsonMessageSerializer();
+
+        $payload = ['b' => 2];
+        $body = json_encode([
+            'payload' => $payload,
+            'message_id' => 'msg-2',
+        ]);
+
+        $decoded = $serializer->decode($body);
+
+        $this->assertSame('msg-2', $decoded->getMessageId());
+        $this->assertSame($payload, $decoded->getPayload());
+    }
+
+    public function testDecodePayloadKeyWithoutIdKeepsWholeObject(): void
+    {
+        $serializer = new JsonMessageSerializer();
+
+        $payload = [
+            'payload' => ['c' => 3],
+            'extra' => 'value',
+        ];
+        $body = json_encode($payload);
+
+        $decoded = $serializer->decode($body);
+
+        $this->assertSame($payload, $decoded->getPayload());
+    }
+
+    public function testDecodePlainJsonObjectWithoutPayloadKey(): void
+    {
+        $serializer = new JsonMessageSerializer();
+
+        $payload = ['x' => 'y'];
+        $body = json_encode($payload);
+
+        $decoded = $serializer->decode($body);
+
+        $this->assertSame($payload, $decoded->getPayload());
+    }
 }

@@ -22,6 +22,8 @@ use illusiard\rabbitmq\middleware\PublishPipeline;
 use illusiard\rabbitmq\middleware\ConsumePipeline;
 use illusiard\rabbitmq\middleware\PublishMiddlewareInterface;
 use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
+use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
+use illusiard\rabbitmq\amqp\LoggingReturnHandler;
 
 class RabbitMqService extends Component
 {
@@ -48,6 +50,8 @@ class RabbitMqService extends Component
     public bool    $consumeFailFast             = true;
     public array   $fatalExceptionClasses       = [];
     public array   $recoverableExceptionClasses = [];
+    public         $returnHandler               = LoggingReturnHandler::class;
+    public bool    $returnHandlerEnabled        = true;
     public ?string $componentId                 = null;
 
     /** @var callable|null */
@@ -58,6 +62,7 @@ class RabbitMqService extends Component
     private ?MessageSerializerInterface $serializerInstance = null;
     private ?PublishPipeline            $publishPipeline    = null;
     private ?ConsumePipeline            $consumePipeline    = null;
+    private ?ReturnHandlerInterface     $returnHandlerInstance = null;
     private ?string                     $activeProfile      = null;
     private ?string                     $lastError          = null;
 
@@ -87,6 +92,8 @@ class RabbitMqService extends Component
                 'consumeFailFast'             => $this->consumeFailFast,
                 'fatalExceptionClasses'       => $this->fatalExceptionClasses,
                 'recoverableExceptionClasses' => $this->recoverableExceptionClasses,
+                'returnHandler'               => $this->returnHandler,
+                'returnHandlerEnabled'        => $this->returnHandlerEnabled,
             ];
 
             if (!empty($this->profiles)) {
@@ -250,6 +257,18 @@ class RabbitMqService extends Component
         $consumer->consume($queue, $wrappedHandler, $prefetch);
     }
 
+    public function tick(float $timeout = 0.0): void
+    {
+        if ($this->publisher === null && $this->connection === null) {
+            return;
+        }
+
+        $publisher = $this->getPublisher();
+        if (method_exists($publisher, 'tick')) {
+            $publisher->tick($timeout);
+        }
+    }
+
     public function setupTopology(array $config): void
     {
         $connection = $this->ensureConnection();
@@ -374,6 +393,34 @@ class RabbitMqService extends Component
         return $this->serializerInstance;
     }
 
+    private function getReturnHandler(): ?ReturnHandlerInterface
+    {
+        if (!$this->returnHandlerEnabled) {
+            return null;
+        }
+
+        if ($this->returnHandlerInstance !== null) {
+            return $this->returnHandlerInstance;
+        }
+
+        if ($this->returnHandler instanceof ReturnHandlerInterface) {
+            $this->returnHandlerInstance = $this->returnHandler;
+            return $this->returnHandlerInstance;
+        }
+
+        if ($this->returnHandler === null) {
+            return null;
+        }
+
+        $instance = Yii::createObject($this->returnHandler);
+        if (!$instance instanceof ReturnHandlerInterface) {
+            throw new \InvalidArgumentException('returnHandler must implement ReturnHandlerInterface.');
+        }
+
+        $this->returnHandlerInstance = $instance;
+        return $this->returnHandlerInstance;
+    }
+
     private function getPublishPipeline(): PublishPipeline
     {
         if ($this->publishPipeline !== null) {
@@ -464,6 +511,8 @@ class RabbitMqService extends Component
             'confirm'           => $this->confirm,
             'mandatory'         => $this->mandatory,
             'publishTimeout'    => $this->publishTimeout,
+            'returnHandler'     => $this->getReturnHandler(),
+            'returnHandlerEnabled' => $this->returnHandlerEnabled,
         ];
 
         if (empty($this->profiles)) {
@@ -500,6 +549,7 @@ class RabbitMqService extends Component
         $this->serializerInstance = null;
         $this->publishPipeline    = null;
         $this->consumePipeline    = null;
+        $this->returnHandlerInstance = null;
         $this->lastError          = null;
     }
 }

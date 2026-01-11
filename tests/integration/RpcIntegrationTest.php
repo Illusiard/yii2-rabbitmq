@@ -44,6 +44,9 @@ class RpcIntegrationTest extends IntegrationTestCase
 
     private function startRpcServer(string $queue)
     {
+        $readyFile = sys_get_temp_dir() . '/rpc_ready_' . uniqid('', true) . '.txt';
+        @unlink($readyFile);
+
         $cmd = [
             PHP_BINARY,
             __DIR__ . '/fixtures/rpc_server.php',
@@ -51,54 +54,57 @@ class RpcIntegrationTest extends IntegrationTestCase
 
         $env = array_merge(getenv(), [
             'RPC_QUEUE' => $queue,
+            'RPC_READY_FILE' => $readyFile,
         ]);
 
+        $null = (stripos(PHP_OS_FAMILY, 'Windows') !== false) ? 'NUL' : '/dev/null';
         $descriptors = [
             0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
+            1 => ['file', $null, 'w'],
+            2 => ['file', $null, 'w'],
         ];
 
         $process = proc_open($cmd, $descriptors, $pipes, null, $env);
         $this->assertIsResource($process);
 
-        fclose($pipes[0]);
-        $ready = $this->waitForProcessOutput($pipes[1], 'READY', 5);
+        if (isset($pipes[0]) && is_resource($pipes[0])) {
+            fclose($pipes[0]);
+        }
+
+        $ready = $this->waitForReadyFile($readyFile, 10);
         $this->assertTrue($ready, 'RPC server did not become ready.');
 
-        return [$process, $pipes];
+        return [$process, $readyFile];
+    }
+
+    private function waitForReadyFile(string $path, int $timeoutSec): bool
+    {
+        $deadline = microtime(true) + max(0, $timeoutSec);
+
+        while (microtime(true) < $deadline) {
+            if (is_file($path)) {
+                $data = @file_get_contents($path);
+                if (is_string($data) && str_contains($data, 'READY')) {
+                    return true;
+                }
+            }
+            usleep(10_000); // 10ms
+        }
+
+        return false;
     }
 
     private function stopProcess(array $handle): void
     {
-        [$process, $pipes] = $handle;
+        [$process, $readyFile] = $handle;
+
         if (is_resource($process)) {
             proc_terminate($process);
-        }
-        foreach ($pipes as $pipe) {
-            if (is_resource($pipe)) {
-                fclose($pipe);
-            }
-        }
-    }
-
-    private function waitForProcessOutput($stream, string $needle, int $timeoutSec): bool
-    {
-        $deadline = microtime(true) + max(0, $timeoutSec);
-        stream_set_blocking($stream, false);
-        $buffer = '';
-
-        while (microtime(true) < $deadline) {
-            $chunk = stream_get_contents($stream);
-            if ($chunk !== false && $chunk !== '') {
-                $buffer .= $chunk;
-                if (strpos($buffer, $needle) !== false) {
-                    return true;
-                }
-            }
-            usleep(100000);
+            proc_close($process);
         }
 
-        return false;
+        if (is_string($readyFile) && $readyFile !== '') {
+            @unlink($readyFile);
+        }
     }
 }

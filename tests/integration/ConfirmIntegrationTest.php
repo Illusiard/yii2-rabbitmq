@@ -4,6 +4,8 @@ namespace illusiard\rabbitmq\tests\integration;
 
 use illusiard\rabbitmq\amqp\AmqpPublisher;
 use illusiard\rabbitmq\amqp\PublishConfirmTracker;
+use illusiard\rabbitmq\amqp\ReturnedMessage;
+use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
 use illusiard\rabbitmq\exceptions\PublishException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
 
@@ -76,25 +78,46 @@ class ConfirmIntegrationTest extends IntegrationTestCase
 
     public function testAMQP_MANDATORY_01_unroutable(): void
     {
+        TestMandatoryReturnHandler::reset();
         $exchange = $this->uniqueName('mandatory_ex');
         $routingKey = 'missing';
 
         $this->declareExchange($exchange);
 
-        $service = $this->createService(['mandatory' => true, 'publishTimeout' => 2]);
+        $service = $this->createService([
+            'mandatory' => true,
+            'returnHandler' => TestMandatoryReturnHandler::class,
+            'returnHandlerEnabled' => true,
+        ]);
         $this->setService($service);
 
         $publisher = $service->getPublisher();
 
-        $this->expectException(PublishException::class);
-        $this->expectExceptionMessage('unroutable');
+        $messageId = 'msg_' . uniqid('', true);
+        $publisher->publish('body', $exchange, $routingKey, ['message_id' => $messageId]);
 
-        try {
-            $publisher->publish('body', $exchange, $routingKey, ['message_id' => 'msg_' . uniqid('', true)]);
-        } catch (PublishException $e) {
-            $this->assertSame(ErrorCode::PUBLISH_UNROUTABLE, $e->getErrorCode());
-            throw $e;
+        $deadline = microtime(true) + 2.0;
+        while (microtime(true) < $deadline && TestMandatoryReturnHandler::$lastEvent === null) {
+            $service->tick(0.05);
+            usleep(50000);
         }
+
+        $event = TestMandatoryReturnHandler::$lastEvent;
+        $this->assertNotNull(
+            $event,
+            'Expected unroutable return event, but none received. message_id=' . $messageId
+        );
+        if ($event === null) {
+            return;
+        }
+
+        $this->assertSame($messageId, $event->messageId, $this->formatReturnEvent($event));
+        $this->assertSame($exchange, $event->exchange, $this->formatReturnEvent($event));
+        $this->assertSame($routingKey, $event->routingKey, $this->formatReturnEvent($event));
+        $this->assertTrue(
+            $event->replyCode === 312 || stripos($event->replyText, 'unroutable') !== false,
+            'Expected unroutable return. ' . $this->formatReturnEvent($event)
+        );
     }
 
     public function testAMQP_TIMEOUT_01_publishTimeout(): void
@@ -132,6 +155,18 @@ class ConfirmIntegrationTest extends IntegrationTestCase
         $ref->setAccessible(true);
         $ref->setValue($publisher, $tracker);
     }
+
+    private function formatReturnEvent(ReturnedMessage $event): string
+    {
+        return sprintf(
+            'replyCode=%d replyText="%s" exchange=%s routingKey=%s messageId=%s',
+            $event->replyCode,
+            $event->replyText,
+            $event->exchange,
+            $event->routingKey,
+            $event->messageId ?? 'null'
+        );
+    }
 }
 
 class TestConfirmTracker extends PublishConfirmTracker
@@ -166,5 +201,20 @@ class TestConfirmTracker extends PublishConfirmTracker
         if ($multiple) {
             $this->nackMultipleSeen = true;
         }
+    }
+}
+
+class TestMandatoryReturnHandler implements ReturnHandlerInterface
+{
+    public static ?ReturnedMessage $lastEvent = null;
+
+    public function handle(ReturnedMessage $event): void
+    {
+        self::$lastEvent = $event;
+    }
+
+    public static function reset(): void
+    {
+        self::$lastEvent = null;
     }
 }

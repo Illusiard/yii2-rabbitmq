@@ -49,10 +49,13 @@ class JsonMessageSerializer implements MessageSerializerInterface
             }
         }
 
-        if (!is_array($data)) {
-            $env = new Envelope($data);
-        } else {
+        if (is_array($data) && $this->isEnvelopeShape($data)) {
+            if (isset($data['message_id']) && !isset($data['messageId'])) {
+                $data['messageId'] = $data['message_id'];
+            }
             $env = Envelope::fromArray($data);
+        } else {
+            $env = new Envelope($data);
         }
 
         if (isset($meta['headers']) && is_array($meta['headers']) && empty($env->getHeaders())) {
@@ -80,5 +83,14 @@ class JsonMessageSerializer implements MessageSerializerInterface
         }
 
         return $env;
+    }
+
+    private function isEnvelopeShape(array $data): bool
+    {
+        if (!array_key_exists('payload', $data)) {
+            return false;
+        }
+
+        return array_key_exists('messageId', $data) || array_key_exists('message_id', $data);
     }
 }

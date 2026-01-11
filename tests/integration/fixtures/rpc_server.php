@@ -11,13 +11,14 @@ if (!$queue) {
     exit(1);
 }
 
-$server = new RpcServer(Yii::createObject($config['components']['rabbitmq']));
-$server->setOnStart(function () {
-    fwrite(STDOUT, "READY\n");
-    fflush(STDOUT);
+$readyFile = getenv('RPC_READY_FILE');
+
+$server = new RpcServer(Yii::$app->rabbitmq);
+$server->setOnStart(function () use ($readyFile) {
+    if ($readyFile) {
+        @file_put_contents($readyFile, "READY\n", LOCK_EX);
+    }
 });
-//$server->serve($queue, RpcHandler::class);
 $server->serve($queue, function (Envelope $req) {
-    // ответ с ok=true и тем же correlationId сохранится RpcServer-ом
     return new Envelope(['ok' => true], [], [], 'rpc.pong', $req->getCorrelationId());
 });

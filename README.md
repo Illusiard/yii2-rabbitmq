@@ -61,6 +61,8 @@ $rabbit->publish('Hello', 'exchange', 'route.key', [
 - mandatory + basic.return:
   - Возникает, когда сообщение unroutable (exchange существует, но нет подходящего binding).
   - Это отдельный класс ошибки от сетевых/канальных: публикация дошла до брокера, но была возвращена.
+  - В режиме mandatory без confirm публикация не блокируется ожиданием (без publishTimeout).
+  - Возвраты обрабатываются асинхронно через return handler и требуют tick() или event loop.
 - delivery_mode / persistence:
   - Для сохранности при рестарте брокера нужны durable queue + persistent message (`delivery_mode=2`).
   - Пакет не выставляет `delivery_mode` автоматически — задавайте его в `properties` при публикации.
@@ -133,6 +135,23 @@ class RabbitMqHandler
 }
 ```
 
+## Console consume
+
+CLI `rabbitmq/consume` использует `RabbitMqService::consume` и ту же семантику пайплайна (middlewares, ExceptionClassifier, managed retry).
+
+Ключевые опции CLI:
+- `--managedRetry=1` и `--retryPolicy='{"maxAttempts":3,"retryQueues":[...],"deadQueue":"..."}'` (x-retry-count, retry/dead)
+- `--consumeFailFast=0|1`, `--fatalExceptionClasses=...`, `--recoverableExceptionClasses=...`
+- `--memoryLimitMb=...` (добавляет memory-limit middleware)
+
+Пример:
+
+```bash
+./yii rabbitmq/consume orders app\\queues\\RabbitMqHandler \
+  --prefetch=1 --memoryLimitMb=256 --managedRetry=1 \
+  --retryPolicy='{"maxAttempts":3,"retryQueues":[{"name":"orders.retry.5s","ttlMs":5000}],"deadQueue":"orders.dead"}'
+```
+
 ## Topology setup
 
 ```php
@@ -188,6 +207,34 @@ return [
 - `message_id` используется для корреляции `basic.return` с конкретной публикацией; если вернуть сообщение невозможно сопоставить, будет ошибка `PUBLISH_UNROUTABLE_UNCORRELATED`.
 
 Включайте эти опции, когда важна надёжная доставка и нужно явно получать ошибки доставки.
+
+## Async return handler (mandatory-only)
+
+При `mandatory=true` и `confirm=false` `basic.return` обрабатывается асинхронно.  
+Чтобы обработчик получал события, вызовите `tick()` в цикле либо используйте внешний event loop.
+
+Конфигурация:
+
+```php
+'components' => [
+    'rabbitmq' => [
+        'class' => illusiard\rabbitmq\components\RabbitMqService::class,
+        'mandatory' => true,
+        'returnHandler' => illusiard\rabbitmq\amqp\LoggingReturnHandler::class,
+        'returnHandlerEnabled' => true,
+    ],
+],
+```
+
+Псевдо‑loop в publish‑only приложении:
+
+```php
+$rabbit = Yii::$app->get('rabbitmq');
+$rabbit->publish('payload', 'exchange', 'rk');
+
+// Дать возможность обработать basic.return (если есть).
+$rabbit->tick(0.1);
+```
 
 ## Managed retry
 
@@ -271,6 +318,8 @@ $rabbit->publishJson(
 $env = Yii::$app->get('rabbitmq')->decodeEnvelope($meta['body'], $meta);
 ```
 
+JSON envelope формат: объект с `payload` и обязательным `messageId` (или `message_id`).
+
 ## Middlewares
 
 Можно подключить middleware для publish/consume:
@@ -319,6 +368,11 @@ $server->serve('rpc.queue', function (Envelope $request): Envelope {
     return new Envelope(['pong' => true], [], [], 'rpc.pong', $request->getCorrelationId());
 });
 ```
+
+RPC и middleware:
+- RPC Client/Server не используют общий publish/consume middleware pipeline.
+- Это намеренно: RPC — отдельный протокольный слой с собственным циклом ожидания ответа.
+- Расширение: можно кастомизировать handler (callable), сериализацию через Envelope/serializer, и таймауты в RpcClient::call().
 
 ## DLQ tools
 
@@ -401,3 +455,17 @@ Consumer restart strategy:
 ```bash
 ./yii rabbitmq/healthcheck --profile=default --timeout=3 --json=0
 ```
+
+## Integration tests
+
+Запуск:
+
+```bash
+vendor/bin/phpunit -c phpunit.integration.xml
+```
+
+Env-флаги:
+- `NACK_CAN_BE_FORCED` (confirm NACK path)
+- `BLOCK_BROKER` (publishTimeout)
+- `KILL_CONNECTION` (reconnect scenarios)
+- `RABBIT_CAN_RESTART` (durable/persistent)

@@ -6,7 +6,9 @@
   "require": {
     "php": ">=8.1",
     "php-amqplib/php-amqplib": "^3.5",
-    "yiisoft/yii2": "^2.0.47"
+    "yiisoft/yii2": "^2.0.47",
+    "ext-pcntl": "*",
+    "ext-ctype": "*"
   },
   "autoload": {
     "psr-4": {
@@ -19,7 +21,8 @@
     }
   },
   "require-dev": {
-    "phpunit/phpunit": "^10.5"
+    "phpunit/phpunit": "^10.5",
+    "ext-posix": "*"
   },
   "repositories": [
     {

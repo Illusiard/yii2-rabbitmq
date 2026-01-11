@@ -34,7 +34,7 @@ class ConsumeIntegrationTest extends IntegrationTestCase
             __DIR__ . '/fixtures/consume_process.php',
         ];
 
-        $env = array_merge($_ENV, [
+        $env = array_merge(getenv(), [
             'CONSUME_QUEUE' => $queue,
             'CONSUME_HANDLER' => ConsumeHandler::class,
             'HANDLER_LOG' => $logFile,

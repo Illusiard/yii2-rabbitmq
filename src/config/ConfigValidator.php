@@ -46,6 +46,7 @@ class ConfigValidator
         $this->validateMiddlewares($config, 'publishMiddlewares');
         $this->validateMiddlewares($config, 'consumeMiddlewares');
         $this->validateConsumeOptions($config);
+        $this->validateReturnHandler($config);
     }
 
     public function validateTopology(array $config): void
@@ -167,6 +168,23 @@ class ConfigValidator
         $this->validateBooleanOption($config, 'consumeFailFast', 'consumeFailFast', ErrorCode::CONFIG_INVALID);
         $this->validateClassList($config, 'fatalExceptionClasses', 'fatalExceptionClasses');
         $this->validateClassList($config, 'recoverableExceptionClasses', 'recoverableExceptionClasses');
+    }
+
+    private function validateReturnHandler(array $config): void
+    {
+        $this->validateBooleanOption($config, 'returnHandlerEnabled', 'returnHandlerEnabled', ErrorCode::CONFIG_INVALID);
+
+        if (!isset($config['returnHandler'])) {
+            return;
+        }
+
+        if ($config['returnHandler'] === null) {
+            return;
+        }
+
+        if (!is_string($config['returnHandler']) && !is_array($config['returnHandler']) && !is_object($config['returnHandler'])) {
+            throw new RabbitMqException('returnHandler must be string, array, object, or null.', ErrorCode::CONFIG_INVALID);
+        }
     }
 
     private function validateClassList(array $config, string $key, string $path): void

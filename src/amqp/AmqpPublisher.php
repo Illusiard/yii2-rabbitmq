@@ -8,6 +8,8 @@ use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
 use Yii;
 use illusiard\rabbitmq\contracts\PublisherInterface;
+use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
+use illusiard\rabbitmq\amqp\ReturnedMessage;
 use illusiard\rabbitmq\exceptions\PublishException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
 
@@ -20,6 +22,8 @@ class AmqpPublisher implements PublisherInterface
     private int $publishTimeout;
     private PublishConfirmTracker $tracker;
     private ?array $uncorrelatedReturn = null;
+    private bool $returnHandlerEnabled;
+    private ?ReturnHandlerInterface $returnHandler;
 
     public function __construct(AmqpConnection $connection, array $config = [])
     {
@@ -28,6 +32,8 @@ class AmqpPublisher implements PublisherInterface
         $this->mandatory = (bool)($config['mandatory'] ?? false);
         $this->publishTimeout = (int)($config['publishTimeout'] ?? 5);
         $this->tracker = new PublishConfirmTracker();
+        $this->returnHandlerEnabled = (bool)($config['returnHandlerEnabled'] ?? true);
+        $this->returnHandler = $this->resolveReturnHandler($config['returnHandler'] ?? null);
     }
 
     public function publish(
@@ -51,8 +57,7 @@ class AmqpPublisher implements PublisherInterface
 
         $channel = $this->getChannel();
         $seqNo = null;
-        $shouldTrack = $this->confirm || $this->mandatory;
-        if ($shouldTrack) {
+        if ($this->confirm) {
             $seqNo = $this->resolvePublishSeqNo($channel);
             $this->tracker->register($seqNo, $messageId, microtime(true));
         }
@@ -76,7 +81,7 @@ class AmqpPublisher implements PublisherInterface
         }
 
         try {
-            if ($shouldTrack && $seqNo !== null) {
+            if ($this->confirm && $seqNo !== null) {
                 $this->waitForPublish($channel, $seqNo, $messageId, $correlationId, $exchange, $routingKey);
             }
         } finally {
@@ -174,29 +179,39 @@ class AmqpPublisher implements PublisherInterface
                     'routing_key' => $routingKey,
                 ];
 
-                $messageId = $this->resolveMessageId($message);
-                if ($messageId === null || $messageId === '') {
-                    $this->uncorrelatedReturn = $returnInfo;
-                    Yii::warning(
-                        ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED . ' Message returned without message_id.',
-                        'rabbitmq'
-                    );
-                    return;
-                }
+                $this->dispatchReturn(
+                    $replyCode,
+                    $replyText,
+                    $exchange,
+                    $routingKey,
+                    $message
+                );
 
-                $seqNo = $this->tracker->markReturned($messageId, $returnInfo);
-                if ($seqNo === null) {
-                    $this->uncorrelatedReturn = $returnInfo;
-                    Yii::warning(
-                        ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED . ' Message returned but not found in inflight map.',
-                        'rabbitmq'
-                    );
+                if ($this->confirm) {
+                    $messageId = $this->resolveMessageId($message);
+                    if ($messageId === null || $messageId === '') {
+                        $this->uncorrelatedReturn = $returnInfo;
+                        Yii::warning(
+                            ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED . ' Message returned without message_id.',
+                            'rabbitmq'
+                        );
+                        return;
+                    }
+
+                    $seqNo = $this->tracker->markReturned($messageId, $returnInfo);
+                    if ($seqNo === null) {
+                        $this->uncorrelatedReturn = $returnInfo;
+                        Yii::warning(
+                            ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED . ' Message returned but not found in inflight map.',
+                            'rabbitmq'
+                        );
+                    }
                 }
             });
         }
     }
 
-    private function waitForPublish(
+    protected function waitForPublish(
         AMQPChannel $channel,
         int $seqNo,
         string $messageId,
@@ -223,32 +238,7 @@ class AmqpPublisher implements PublisherInterface
             }
 
             $state = $this->tracker->get($seqNo);
-            if ($this->uncorrelatedReturn !== null) {
-                $this->uncorrelatedReturn = null;
-                $this->logPublishError(
-                    ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED,
-                    'Publish failed: unroutable return could not be correlated.',
-                    $messageId,
-                    $correlationId,
-                    $exchange,
-                    $routingKey
-                );
-                throw new PublishException(
-                    'Message was returned by broker but could not be correlated.',
-                    ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED
-                );
-            }
-            if ($state !== null && $state['returned']) {
-                $this->logPublishError(
-                    ErrorCode::PUBLISH_UNROUTABLE,
-                    'Publish failed: message was returned by broker.',
-                    $messageId,
-                    $correlationId,
-                    $exchange,
-                    $routingKey
-                );
-                throw new PublishException('Message was returned by broker (unroutable).', ErrorCode::PUBLISH_UNROUTABLE);
-            }
+            $this->throwIfReturned($state, $messageId, $correlationId, $exchange, $routingKey);
             if ($this->confirm && $state !== null && $state['nacked']) {
                 $this->logPublishError(
                     ErrorCode::PUBLISH_NACK,
@@ -278,6 +268,41 @@ class AmqpPublisher implements PublisherInterface
                 'Publish confirm timeout after ' . $this->publishTimeout . ' seconds.',
                 ErrorCode::PUBLISH_TIMEOUT
             );
+        }
+    }
+
+    private function throwIfReturned(
+        ?array $state,
+        string $messageId,
+        ?string $correlationId,
+        string $exchange,
+        string $routingKey
+    ): void {
+        if ($this->uncorrelatedReturn !== null) {
+            $this->uncorrelatedReturn = null;
+            $this->logPublishError(
+                ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED,
+                'Publish failed: unroutable return could not be correlated.',
+                $messageId,
+                $correlationId,
+                $exchange,
+                $routingKey
+            );
+            throw new PublishException(
+                'Message was returned by broker but could not be correlated.',
+                ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED
+            );
+        }
+        if ($state !== null && $state['returned']) {
+            $this->logPublishError(
+                ErrorCode::PUBLISH_UNROUTABLE,
+                'Publish failed: message was returned by broker.',
+                $messageId,
+                $correlationId,
+                $exchange,
+                $routingKey
+            );
+            throw new PublishException('Message was returned by broker (unroutable).', ErrorCode::PUBLISH_UNROUTABLE);
         }
     }
 
@@ -336,5 +361,94 @@ class AmqpPublisher implements PublisherInterface
             . ' routingKey=' . $routingKey,
             'rabbitmq'
         );
+    }
+
+    public function tick(float $timeout = 0.0): void
+    {
+        if ($this->channel === null || !$this->channel->is_open()) {
+            return;
+        }
+
+        $timeout = max(0.0, $timeout);
+        try {
+            if ($this->confirm) {
+                $this->channel->wait_for_pending_acks_returns($timeout);
+            } else {
+                $this->channel->wait(null, false, $timeout);
+            }
+        } catch (AMQPTimeoutException $e) {
+            return;
+        }
+    }
+
+    private function resolveReturnHandler($handler): ?ReturnHandlerInterface
+    {
+        if (!$this->returnHandlerEnabled || $handler === null) {
+            return null;
+        }
+
+        if ($handler instanceof ReturnHandlerInterface) {
+            return $handler;
+        }
+
+        $instance = Yii::createObject($handler);
+        if (!$instance instanceof ReturnHandlerInterface) {
+            throw new \InvalidArgumentException('returnHandler must implement ReturnHandlerInterface.');
+        }
+
+        return $instance;
+    }
+
+    private function dispatchReturn(
+        int $replyCode,
+        string $replyText,
+        string $exchange,
+        string $routingKey,
+        $message
+    ): void {
+        if (!$this->returnHandlerEnabled || $this->returnHandler === null) {
+            return;
+        }
+
+        $properties = [];
+        $headers = [];
+        if (is_object($message) && method_exists($message, 'get_properties')) {
+            $properties = $message->get_properties();
+            if (is_array($properties) && isset($properties['application_headers'])
+                && $properties['application_headers'] instanceof AMQPTable
+            ) {
+                $headers = $properties['application_headers']->getNativeData();
+                $properties['application_headers'] = $headers;
+            }
+        }
+
+        $bodySize = 0;
+        if (is_object($message) && method_exists($message, 'getBody')) {
+            $body = $message->getBody();
+            if (is_string($body)) {
+                $bodySize = strlen($body);
+            }
+        }
+
+        $messageId = $this->resolveMessageId($message);
+        $correlationId = null;
+        if (is_array($properties) && isset($properties['correlation_id'])) {
+            $correlationId = (string)$properties['correlation_id'];
+        }
+
+        $event = new ReturnedMessage(
+            $messageId !== null ? (string)$messageId : null,
+            $correlationId,
+            $exchange,
+            $routingKey,
+            (int)$replyCode,
+            (string)$replyText,
+            $headers,
+            is_array($properties) ? $properties : [],
+            $bodySize,
+            microtime(true)
+        );
+
+        $this->returnHandler->handle($event);
     }
 }
