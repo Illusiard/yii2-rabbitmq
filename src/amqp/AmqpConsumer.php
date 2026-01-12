@@ -8,6 +8,8 @@ use PhpAmqpLib\Exception\AMQPConnectionClosedException;
 use PhpAmqpLib\Exception\AMQPIOException;
 use PhpAmqpLib\Exception\AMQPRuntimeException;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
+use RuntimeException;
+use Throwable;
 use Yii;
 use illusiard\rabbitmq\contracts\ConsumerInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;
@@ -60,7 +62,7 @@ class AmqpConsumer implements ConsumerInterface
 
                 $this->consumeOnce($queue, $handler, $prefetch);
                 return;
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 if (!$this->isConnectionException($e) || $attempts >= 3) {
                     $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::CONSUME_FAILED;
                     Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
@@ -105,7 +107,7 @@ class AmqpConsumer implements ConsumerInterface
 
                 try {
                     $result = $handler($message->getBody(), $meta);
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     if ($e instanceof FatalException) {
                         $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
                         $this->cancelIfNeeded($message->getChannel(), $consumerTag);
@@ -116,7 +118,7 @@ class AmqpConsumer implements ConsumerInterface
                     Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
                     $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
                     $this->cancelIfNeeded($message->getChannel(), $consumerTag);
-                    if ($e instanceof \RuntimeException && $e->getMessage() === 'Memory limit exceeded.') {
+                    if ($e instanceof RuntimeException && $e->getMessage() === 'Memory limit exceeded.') {
                         throw $e;
                     }
                     return;
@@ -139,7 +141,7 @@ class AmqpConsumer implements ConsumerInterface
                                     $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
                                 }
                             );
-                        } catch (\Throwable $e) {
+                        } catch (Throwable $e) {
                             $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
                             throw $e;
                         }
@@ -237,14 +239,14 @@ class AmqpConsumer implements ConsumerInterface
                 $headers['x-retry-count'] = $this->resolveRetryCount($meta) + 1;
             }
             $this->retryPublisher->publish($body, '', $queue, $properties, $headers);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::PUBLISH_FAILED;
             Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
             throw $e;
         }
     }
 
-    private function isConnectionException(\Throwable $e): bool
+    private function isConnectionException(Throwable $e): bool
     {
         return $e instanceof AMQPConnectionClosedException
             || $e instanceof AMQPChannelClosedException

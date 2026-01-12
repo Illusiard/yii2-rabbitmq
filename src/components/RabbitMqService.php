@@ -3,6 +3,7 @@
 namespace illusiard\rabbitmq\components;
 
 use illusiard\rabbitmq\amqp\AmqpConsumer;
+use InvalidArgumentException;
 use Yii;
 use yii\base\Component;
 use illusiard\rabbitmq\amqp\AmqpConnection;
@@ -53,6 +54,7 @@ class RabbitMqService extends Component
     public         $returnHandler               = LoggingReturnHandler::class;
     public bool    $returnHandlerEnabled        = true;
     public ?string $componentId                 = null;
+    public array   $discovery                   = [];
 
     /** @var callable|null */
     public $connectionFactory;
@@ -234,14 +236,20 @@ class RabbitMqService extends Component
         return $this->publisher;
     }
 
-    public function consume(string $queue, string $handlerFqcn, int $prefetch = 1): void
+    public function consume(string $queue, $handler, array $options = []): void
     {
-        $handler = Yii::createObject($handlerFqcn);
+        $options = $this->normalizeConsumeOptions($options);
+        $prefetch = $options['prefetch'];
+
+        $handlerClass = $this->resolveHandlerClass($handler);
+        if (is_string($handler)) {
+            $handler = Yii::createObject($handler);
+        }
         if (!is_callable($handler)) {
-            throw new \InvalidArgumentException('Handler must be callable via __invoke.');
+            throw new InvalidArgumentException('Handler must be callable via __invoke.');
         }
 
-        $context        = $this->buildConsumeContext($queue, $handlerFqcn);
+        $context        = $this->buildConsumeContext($queue, $handlerClass);
         $pipeline       = $this->getConsumePipeline();
         $wrappedHandler = function (string $body, array $meta) use ($handler, $pipeline, $context) {
             return $pipeline->run($body, $meta, $context, function (string $body, array $meta) use ($handler) {
@@ -255,6 +263,72 @@ class RabbitMqService extends Component
         }
 
         $consumer->consume($queue, $wrappedHandler, $prefetch);
+    }
+
+    private function normalizeConsumeOptions(array $options): array
+    {
+        $prefetch = $options['prefetch'] ?? 1;
+
+        if (isset($options['managedRetry'])) {
+            $this->managedRetry = (bool)$options['managedRetry'];
+        }
+
+        if (isset($options['retryPolicy']) && is_array($options['retryPolicy'])) {
+            $this->retryPolicy = $options['retryPolicy'];
+        }
+
+        $pipelineChanged = false;
+        if (isset($options['consumeFailFast'])) {
+            $this->consumeFailFast = (bool)$options['consumeFailFast'];
+            $pipelineChanged = true;
+        }
+
+        if (isset($options['fatalExceptionClasses']) && is_array($options['fatalExceptionClasses'])) {
+            $this->fatalExceptionClasses = $options['fatalExceptionClasses'];
+            $pipelineChanged = true;
+        }
+
+        if (isset($options['recoverableExceptionClasses']) && is_array($options['recoverableExceptionClasses'])) {
+            $this->recoverableExceptionClasses = $options['recoverableExceptionClasses'];
+            $pipelineChanged = true;
+        }
+
+        $middlewares = $options['consumeMiddlewares'] ?? $options['middlewares'] ?? null;
+        if (is_array($middlewares)) {
+            $this->consumeMiddlewares = $middlewares;
+            $pipelineChanged = true;
+        }
+
+        if ($pipelineChanged) {
+            $this->consumePipeline = null;
+        }
+
+        return [
+            'prefetch' => (int)$prefetch,
+        ];
+    }
+
+    private function resolveHandlerClass($handler): ?string
+    {
+        if (is_string($handler)) {
+            return $handler;
+        }
+
+        if (is_object($handler)) {
+            return get_class($handler);
+        }
+
+        if (is_array($handler) && isset($handler[0])) {
+            $target = $handler[0];
+            if (is_object($target)) {
+                return get_class($target);
+            }
+            if (is_string($target)) {
+                return $target;
+            }
+        }
+
+        return null;
     }
 
     public function tick(float $timeout = 0.0): void
@@ -414,7 +488,7 @@ class RabbitMqService extends Component
 
         $instance = Yii::createObject($this->returnHandler);
         if (!$instance instanceof ReturnHandlerInterface) {
-            throw new \InvalidArgumentException('returnHandler must implement ReturnHandlerInterface.');
+            throw new InvalidArgumentException('returnHandler must implement ReturnHandlerInterface.');
         }
 
         $this->returnHandlerInstance = $instance;
@@ -463,7 +537,7 @@ class RabbitMqService extends Component
             }
 
             if (!$instance instanceof $interface) {
-                throw new \InvalidArgumentException('Middleware must implement ' . $interface);
+                throw new InvalidArgumentException('Middleware must implement ' . $interface);
             }
 
             $middlewares[] = $instance;

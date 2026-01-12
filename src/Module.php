@@ -5,6 +5,7 @@ namespace illusiard\rabbitmq;
 use Yii;
 use yii\base\Module as BaseModule;
 use illusiard\rabbitmq\components\RabbitMqService;
+use yii\console\Application;
 
 class Module extends BaseModule
 {
@@ -12,7 +13,7 @@ class Module extends BaseModule
     {
         parent::init();
 
-        if (Yii::$app instanceof \yii\console\Application) {
+        if (Yii::$app instanceof Application) {
             $this->controllerNamespace = 'illusiard\\rabbitmq\\console';
         }
 

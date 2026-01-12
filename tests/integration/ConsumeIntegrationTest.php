@@ -2,8 +2,6 @@
 
 namespace illusiard\rabbitmq\tests\integration;
 
-use illusiard\rabbitmq\tests\integration\fixtures\ConsumeHandler;
-
 /**
  * @group integration
  */
@@ -11,6 +9,9 @@ class ConsumeIntegrationTest extends IntegrationTestCase
 {
     public function testAMQP_CONSUME_01_gracefulShutdown(): void
     {
+        $readyFile = sys_get_temp_dir() . '/rpc_ready_' . uniqid('', true) . '.txt';
+        @unlink($readyFile);
+
         if (!function_exists('pcntl_signal') || !function_exists('posix_kill')) {
             $this->markTestSkipped('pcntl/posix extensions are required for SIGTERM tests.');
         }
@@ -36,15 +37,17 @@ class ConsumeIntegrationTest extends IntegrationTestCase
 
         $env = array_merge(getenv(), [
             'CONSUME_QUEUE' => $queue,
-            'CONSUME_HANDLER' => ConsumeHandler::class,
+            'CONSUMER_ID' => 'consume',
             'HANDLER_LOG' => $logFile,
             'HANDLER_SLEEP_MS' => '200',
+            'CONSUMER_READY_FILE' => $readyFile,
         ]);
 
+        $null = (stripos(PHP_OS_FAMILY, 'Windows') !== false) ? 'NUL' : '/dev/null';
         $descriptors = [
             0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
+            1 => ['file', $null, 'w'],
+            2 => ['file', $null, 'w'],
         ];
 
         $process = proc_open($cmd, $descriptors, $pipes, null, $env);
@@ -52,7 +55,7 @@ class ConsumeIntegrationTest extends IntegrationTestCase
 
         fclose($pipes[0]);
 
-        $ready = $this->waitForProcessOutput($pipes[1], 'READY', 5);
+        $ready = $this->waitForReadyFile($readyFile, 5);
         $this->assertTrue($ready, 'Consumer process did not become ready.');
 
         $status = proc_get_status($process);
@@ -70,23 +73,23 @@ class ConsumeIntegrationTest extends IntegrationTestCase
         $this->assertTrue($this->waitForQueueCount($queue, 0));
 
         @unlink($logFile);
+        if ($readyFile !== '') {
+            @unlink($readyFile);
+        }
     }
 
-    private function waitForProcessOutput($stream, string $needle, int $timeoutSec): bool
+    private function waitForReadyFile(string $path, int $timeoutSec): bool
     {
         $deadline = microtime(true) + max(0, $timeoutSec);
-        stream_set_blocking($stream, false);
-        $buffer = '';
 
         while (microtime(true) < $deadline) {
-            $chunk = stream_get_contents($stream);
-            if ($chunk !== false && $chunk !== '') {
-                $buffer .= $chunk;
-                if (strpos($buffer, $needle) !== false) {
+            if (is_file($path)) {
+                $data = @file_get_contents($path);
+                if (is_string($data) && str_contains($data, 'READY')) {
                     return true;
                 }
             }
-            usleep(100000);
+            usleep(10_000); // 10ms
         }
 
         return false;
@@ -95,19 +98,66 @@ class ConsumeIntegrationTest extends IntegrationTestCase
     private function waitForProcessExit($process, array $pipes, int $timeoutSec): int
     {
         $deadline = microtime(true) + max(0, $timeoutSec);
-        while (microtime(true) < $deadline) {
-            $status = proc_get_status($process);
-            if (!$status['running']) {
-                $this->closePipes($pipes);
-                return (int)$status['exitcode'];
+
+        $status = proc_get_status($process);
+        $pid = (int)($status['pid'] ?? 0);
+        if ($pid <= 0) {
+            $this->closePipes($pipes);
+            if (is_resource($process)) {
+                proc_terminate($process);
+                proc_close($process);
             }
+            return -1;
+        }
+
+        while (microtime(true) < $deadline) {
+            $wait = pcntl_waitpid($pid, $wstatus, WNOHANG);
+            if ($wait === -1) {
+                break;
+            }
+            if ($wait > 0) {
+                $this->closePipes($pipes);
+                if (is_resource($process)) {
+                    proc_close($process);
+                }
+
+                if (pcntl_wifexited($wstatus)) {
+                    return pcntl_wexitstatus($wstatus);
+                }
+
+                if (pcntl_wifsignaled($wstatus)) {
+                    return 128 + pcntl_wtermsig($wstatus);
+                }
+
+                return -1;
+            }
+
             usleep(100000);
         }
 
-        proc_terminate($process);
+        if (is_resource($process)) {
+            proc_terminate($process);
+        }
         $this->closePipes($pipes);
 
-        return -1;
+        $wait = pcntl_waitpid($pid, $wstatus, 0);
+        if ($wait > 0) {
+            if (pcntl_wifexited($wstatus)) {
+                $code = pcntl_wexitstatus($wstatus);
+            } elseif (pcntl_wifsignaled($wstatus)) {
+                $code = 128 + pcntl_wtermsig($wstatus);
+            } else {
+                $code = -1;
+            }
+        } else {
+            $code = -1;
+        }
+
+        if (is_resource($process)) {
+            proc_close($process);
+        }
+
+        return $code;
     }
 
     private function closePipes(array $pipes): void

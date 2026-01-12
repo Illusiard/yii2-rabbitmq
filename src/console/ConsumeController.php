@@ -2,19 +2,24 @@
 
 namespace illusiard\rabbitmq\console;
 
+use Closure;
+use illusiard\rabbitmq\components\RabbitMqService;
 use Yii;
 use yii\console\Controller;
 use illusiard\rabbitmq\amqp\AmqpConsumer;
+use illusiard\rabbitmq\consumer\ConsumerDiscovery;
+use illusiard\rabbitmq\consumer\ConsumerInterface;
 use illusiard\rabbitmq\exceptions\FatalException;
 use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
 
 class ConsumeController extends Controller
 {
-    public ?int $managedRetry = null;
-    public ?string $retryPolicy = null;
-    public ?int $consumeFailFast = null;
-    public ?string $fatalExceptionClasses = null;
-    public ?string $recoverableExceptionClasses = null;
+    public ?int      $managedRetry                = null;
+    public ?string   $retryPolicy                 = null;
+    public ?int      $consumeFailFast             = null;
+    public ?string   $fatalExceptionClasses       = null;
+    public ?string   $recoverableExceptionClasses = null;
+    private ?Closure $onStart                     = null;
 
     public function options($actionID)
     {
@@ -27,9 +32,9 @@ class ConsumeController extends Controller
         ]);
     }
 
-    public function actionIndex(string $queue, string $handler, int $prefetch = 1, int $memoryLimitMb = 256): int
+    public function actionIndex(string $consumerId, int $memoryLimitMb = 256): int
     {
-        $memoryLimitBytes = $memoryLimitMb * 1024 * 1024;
+        $memoryLimitBytes  = $memoryLimitMb * 1024 * 1024;
         $shutdownRequested = false;
 
         if (function_exists('pcntl_signal')) {
@@ -47,9 +52,37 @@ class ConsumeController extends Controller
         }
 
         try {
+            /** @var RabbitMqService $rabbit */
             $rabbit = Yii::$app->rabbitmq;
-            $this->applyConsumeOptions($rabbit, $memoryLimitBytes);
-            $this->applyRetryOptions($rabbit);
+            if (!$this->isDiscoveryEnabled($rabbit->discovery ?? [])) {
+                $this->stderr("Discovery is disabled; enable it to run consumers by id.\n");
+
+                return 1;
+            }
+
+            $registry      = (new ConsumerDiscovery($rabbit->discovery))->discover();
+            $consumerClass = $registry->get($consumerId);
+            if ($consumerClass === null) {
+                $this->stderr("Consumer not found: {$consumerId}\n");
+
+                return 1;
+            }
+
+            $consumerInstance = Yii::createObject($consumerClass);
+            if (!$consumerInstance instanceof ConsumerInterface) {
+                $this->stderr("Consumer class '{$consumerClass}' must implement ConsumerInterface.\n");
+
+                return 1;
+            }
+
+            $optionsRaw = $consumerInstance->options();
+            if (!is_array($optionsRaw)) {
+                $this->stderr("Consumer options must be an array.\n");
+
+                return 1;
+            }
+
+            $options = $this->buildConsumeOptions($optionsRaw, $memoryLimitBytes);
 
             $consumer = $rabbit->getConnection()->getConsumer();
             if ($consumer instanceof AmqpConsumer) {
@@ -58,55 +91,96 @@ class ConsumeController extends Controller
                 });
             }
 
+            $queue   = $consumerInstance->queue();
+            $handler = $consumerInstance->handler();
+
             Yii::info('Consumer started for queue: ' . $queue, 'rabbitmq');
-            $rabbit->consume($queue, $handler, $prefetch);
+            $rabbit->consume($queue, $handler, $options);
             Yii::info('Consumer stopped for queue: ' . $queue, 'rabbitmq');
         } catch (FatalException $e) {
             $this->stderr($e->getMessage() . PHP_EOL);
+
             return 1;
         }
 
         return 0;
     }
 
-    private function applyConsumeOptions($rabbit, int $memoryLimitBytes): void
+    public function actionConsumers(): int
+    {
+        $rabbit = Yii::$app->rabbitmq;
+        if (!$this->isDiscoveryEnabled($rabbit->discovery ?? [])) {
+            $this->stderr("Discovery is disabled; enable it to list consumers.\n");
+
+            return 1;
+        }
+
+        $registry  = (new ConsumerDiscovery($rabbit->discovery))->discover();
+        $consumers = $registry->all();
+        if (empty($consumers)) {
+            $this->stdout("No consumers found.\n");
+
+            return 0;
+        }
+
+        ksort($consumers);
+        foreach ($consumers as $id => $fqcn) {
+            $this->stdout($id . "\t" . $fqcn . PHP_EOL);
+        }
+
+        return 0;
+    }
+
+    private function buildConsumeOptions(array $options, int $memoryLimitBytes): array
     {
         if ($this->consumeFailFast !== null) {
-            $rabbit->consumeFailFast = (bool)$this->consumeFailFast;
+            $options['consumeFailFast'] = (bool)$this->consumeFailFast;
         }
 
         if ($this->fatalExceptionClasses !== null) {
-            $rabbit->fatalExceptionClasses = $this->parseClassList($this->fatalExceptionClasses);
+            $options['fatalExceptionClasses'] = $this->parseClassList($this->fatalExceptionClasses);
         }
 
         if ($this->recoverableExceptionClasses !== null) {
-            $rabbit->recoverableExceptionClasses = $this->parseClassList($this->recoverableExceptionClasses);
+            $options['recoverableExceptionClasses'] = $this->parseClassList($this->recoverableExceptionClasses);
         }
 
         if ($memoryLimitBytes > 0) {
-            $middlewares = $rabbit->consumeMiddlewares;
-            $middlewares[] = [
-                'class' => MemoryLimitMiddleware::class,
+            $middlewares                   = $options['consumeMiddlewares'] ?? $options['middlewares'] ?? [];
+            $middlewares[]                 = [
+                'class'            => MemoryLimitMiddleware::class,
                 'memoryLimitBytes' => $memoryLimitBytes,
             ];
-            $rabbit->consumeMiddlewares = $middlewares;
+            $options['consumeMiddlewares'] = $middlewares;
+            unset($options['middlewares']);
         }
-    }
 
-    private function applyRetryOptions($rabbit): void
-    {
         if ($this->managedRetry !== null) {
-            $rabbit->managedRetry = (bool)$this->managedRetry;
+            $options['managedRetry'] = (bool)$this->managedRetry;
         }
 
         if ($this->retryPolicy !== null && $this->retryPolicy !== '') {
-            $rabbit->retryPolicy = $this->parseRetryPolicy($this->retryPolicy);
+            $options['retryPolicy'] = $this->parseRetryPolicy($this->retryPolicy);
         }
+
+        return $options;
+    }
+
+    private function isDiscoveryEnabled(array $config): bool
+    {
+        if (!($config['enabled'] ?? false)) {
+            return false;
+        }
+
+        $paths = $config['paths'] ?? [];
+
+        return is_array($paths) && !empty($paths);
     }
 
     private function parseClassList(string $value): array
     {
         $items = array_map('trim', explode(',', $value));
+
         return array_values(array_filter($items, function ($item) {
             return $item !== '';
         }));
@@ -123,5 +197,10 @@ class ConsumeController extends Controller
         }
 
         return $data;
+    }
+
+    public function setOnStart(?Closure $param): void
+    {
+        $this->onStart = $param;
     }
 }

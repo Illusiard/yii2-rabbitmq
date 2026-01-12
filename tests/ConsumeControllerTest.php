@@ -9,10 +9,39 @@ use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
 
 class ConsumeControllerTest extends TestCase
 {
+    private ?string $originalAppAlias = null;
+    private ?string $tempRoot = null;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $alias = Yii::getAlias('@app', false);
+        $this->originalAppAlias = $alias !== false ? $alias : null;
+    }
+
+    protected function tearDown(): void
+    {
+        if ($this->tempRoot && is_dir($this->tempRoot)) {
+            $this->removeDir($this->tempRoot);
+        }
+
+        if ($this->originalAppAlias !== null) {
+            Yii::setAlias('@app', $this->originalAppAlias);
+        }
+
+        parent::tearDown();
+    }
+
     public function testConsumeControllerPassesOptionsToService(): void
     {
         $service = new FakeRabbitMqService();
         Yii::$app->set('rabbitmq', $service);
+
+        $this->prepareAppConsumers();
+        $service->discovery = [
+            'enabled' => true,
+            'paths' => ['@app/services/rabbitmq/consumers'],
+        ];
 
         $controller = new ConsumeController('rabbitmq/consume', Yii::$app);
         $controller->managedRetry = 1;
@@ -27,40 +56,75 @@ class ConsumeControllerTest extends TestCase
         $controller->fatalExceptionClasses = 'RuntimeException,InvalidArgumentException';
         $controller->recoverableExceptionClasses = 'Exception';
 
-        $exitCode = $controller->actionIndex('orders', 'app\\queues\\RabbitMqHandler', 3, 128);
+        $exitCode = $controller->actionIndex('orders', 128);
 
         $this->assertSame(0, $exitCode);
-        $this->assertSame(['orders', 'app\\queues\\RabbitMqHandler', 3], $service->consumeArgs);
-        $this->assertTrue($service->managedRetry);
+        $this->assertSame('orders', $service->consumeArgs[0]);
+        $this->assertSame('app\\queues\\RabbitMqHandler', $service->consumeArgs[1]);
+
+        $options = $service->consumeArgs[2];
+        $this->assertSame(3, $options['prefetch']);
+        $this->assertTrue($options['managedRetry']);
         $this->assertSame([
             'maxAttempts' => 2,
             'retryQueues' => [
                 ['name' => 'orders.retry.5s', 'ttlMs' => 5000],
             ],
             'deadQueue' => 'orders.dead',
-        ], $service->retryPolicy);
-        $this->assertFalse($service->consumeFailFast);
-        $this->assertSame(['RuntimeException', 'InvalidArgumentException'], $service->fatalExceptionClasses);
-        $this->assertSame(['Exception'], $service->recoverableExceptionClasses);
-        $this->assertCount(1, $service->consumeMiddlewares);
-        $this->assertSame(MemoryLimitMiddleware::class, $service->consumeMiddlewares[0]['class']);
-        $this->assertSame(128 * 1024 * 1024, $service->consumeMiddlewares[0]['memoryLimitBytes']);
+        ], $options['retryPolicy']);
+        $this->assertFalse($options['consumeFailFast']);
+        $this->assertSame(['RuntimeException', 'InvalidArgumentException'], $options['fatalExceptionClasses']);
+        $this->assertSame(['Exception'], $options['recoverableExceptionClasses']);
+        $this->assertCount(2, $options['consumeMiddlewares']);
+        $this->assertSame(MemoryLimitMiddleware::class, $options['consumeMiddlewares'][1]['class']);
+        $this->assertSame(128 * 1024 * 1024, $options['consumeMiddlewares'][1]['memoryLimitBytes']);
+    }
+
+    private function prepareAppConsumers(): void
+    {
+        $this->tempRoot = sys_get_temp_dir() . '/rabbitmq_test_' . uniqid();
+        $consumerDir = $this->tempRoot . '/services/rabbitmq/consumers';
+        $handlerDir = $this->tempRoot . '/queues';
+
+        mkdir($consumerDir, 0777, true);
+        mkdir($handlerDir, 0777, true);
+
+        file_put_contents(
+            $handlerDir . '/RabbitMqHandler.php',
+            "<?php\n\nnamespace app\\queues;\n\nclass RabbitMqHandler\n{\n    public function __invoke(string \$body, array \$meta): bool\n    {\n        return true;\n    }\n}\n"
+        );
+
+        file_put_contents(
+            $consumerDir . '/OrdersConsumer.php',
+            "<?php\n\nnamespace app\\services\\rabbitmq\\consumers;\n\nuse illusiard\\rabbitmq\\consumer\\ConsumerInterface;\n\nclass OrdersConsumer implements ConsumerInterface\n{\n    public function queue(): string\n    {\n        return 'orders';\n    }\n\n    public function handler()\n    {\n        return \\app\\queues\\RabbitMqHandler::class;\n    }\n\n    public function options(): array\n    {\n        return [\n            'prefetch' => 3,\n            'consumeMiddlewares' => [\n                ['class' => '" . MemoryLimitMiddleware::class . "', 'memoryLimitBytes' => 1024],\n            ],\n        ];\n    }\n}\n"
+        );
+
+        Yii::setAlias('@app', $this->tempRoot);
+    }
+
+    private function removeDir(string $dir): void
+    {
+        $items = array_diff(scandir($dir), ['.', '..']);
+        foreach ($items as $item) {
+            $path = $dir . DIRECTORY_SEPARATOR . $item;
+            if (is_dir($path)) {
+                $this->removeDir($path);
+            } else {
+                @unlink($path);
+            }
+        }
+        @rmdir($dir);
     }
 }
 
 class FakeRabbitMqService extends \yii\base\Component
 {
-    public array $consumeMiddlewares = [];
-    public bool $managedRetry = false;
-    public array $retryPolicy = [];
-    public bool $consumeFailFast = true;
-    public array $fatalExceptionClasses = [];
-    public array $recoverableExceptionClasses = [];
     public array $consumeArgs = [];
+    public array $discovery = [];
 
-    public function consume(string $queue, string $handlerFqcn, int $prefetch = 1): void
+    public function consume(string $queue, $handler, array $options = []): void
     {
-        $this->consumeArgs = [$queue, $handlerFqcn, $prefetch];
+        $this->consumeArgs = [$queue, $handler, $options];
     }
 
     public function getConnection()

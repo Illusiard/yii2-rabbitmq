@@ -39,12 +39,19 @@ class ConsoleControllersTest extends TestCase
         });
         Yii::$app->set('rabbitmq', new ConsoleTestRabbitMqService());
 
-        $controller = new DlqInspectController('rabbitmq/dlq-inspect', Yii::$app);
+        $controller = new class('rabbitmq/dlq-inspect', Yii::$app) extends DlqInspectController {
+            public string $buffer = '';
+
+            public function stdout($string)
+            {
+                $this->buffer .= $string;
+                return strlen($string);
+            }
+        };
         $controller->json = 1;
 
-        ob_start();
         $exitCode = $controller->actionIndex('orders.dead');
-        $output = trim(ob_get_clean());
+        $output = trim($controller->buffer);
 
         $this->assertSame(0, $exitCode);
         $data = json_decode($output, true);

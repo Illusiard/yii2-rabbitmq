@@ -5,15 +5,20 @@ require __DIR__ . '/../bootstrap.php';
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\console\ConsumeController;
 
-$queue = getenv('CONSUME_QUEUE');
-$handler = getenv('CONSUME_HANDLER');
-$prefetch = getenv('CONSUME_PREFETCH') ? (int)getenv('CONSUME_PREFETCH') : 1;
+$consumerId = getenv('CONSUMER_ID');
 $memoryLimit = getenv('CONSUME_MEMORY_MB') ? (int)getenv('CONSUME_MEMORY_MB') : 256;
 
-if (!$queue || !$handler) {
-    fwrite(STDERR, "CONSUME_QUEUE and CONSUME_HANDLER are required\n");
+if (!$consumerId) {
+    fwrite(STDERR, "CONSUMER_ID is required\n");
     exit(1);
 }
+
+if (!getenv('CONSUME_QUEUE')) {
+    fwrite(STDERR, "CONSUME_QUEUE is required\n");
+    exit(1);
+}
+
+$readyFile = getenv('CONSUMER_READY_FILE');
 
 $service = new RabbitMqService([
     'host' => getenv('RABBIT_HOST') ?: 'localhost',
@@ -21,6 +26,10 @@ $service = new RabbitMqService([
     'user' => getenv('RABBIT_USER') ?: 'guest',
     'password' => getenv('RABBIT_PASSWORD') ?: 'guest',
     'vhost' => getenv('RABBIT_VHOST') ?: '/',
+    'discovery' => [
+        'enabled' => true,
+        'paths' => ['@app/tests/integration/fixtures'],
+    ],
 ]);
 
 if (Yii::$app) {
@@ -30,6 +39,11 @@ if (Yii::$app) {
 fwrite(STDOUT, "READY\n");
 fflush(STDOUT);
 
-$controller = new ConsumeController('rabbitmq/consume', Yii::$app);
-$code = $controller->actionIndex($queue, $handler, $prefetch, $memoryLimit);
+$controller = new ConsumeController('consume', Yii::$app);
+$controller->setOnStart(function () use ($readyFile) {
+    if ($readyFile) {
+        @file_put_contents($readyFile, "READY\n", LOCK_EX);
+    }
+});
+$code = $controller->actionIndex($consumerId, $memoryLimit);
 exit($code);

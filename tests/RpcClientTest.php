@@ -66,6 +66,7 @@ class FakeRpcConnection implements ConnectionInterface
     {
         $this->publisher = $publisher;
         $this->channel = $channel;
+        $this->connected = true;
     }
 
     public function connect(): void
@@ -95,15 +96,21 @@ class FakeRpcConnection implements ConnectionInterface
 
     public function getAmqpConnection(): object
     {
-        return new class($this->channel) {
+        return new class($this->channel, $this) {
             private FakeRpcChannelTimeout $channel;
-            public function __construct(FakeRpcChannelTimeout $channel)
+            private FakeRpcConnection $connection;
+            public function __construct(FakeRpcChannelTimeout $channel, FakeRpcConnection $connection)
             {
                 $this->channel = $channel;
+                $this->connection = $connection;
             }
             public function channel(): FakeRpcChannelTimeout
             {
                 return $this->channel;
+            }
+            public function isConnected(): bool
+            {
+                return $this->connection->isConnected();
             }
         };
     }

@@ -40,10 +40,7 @@ class AmqpPublisherTest extends TestCase
             'confirm_select',
             'set_ack_handler',
             'set_nack_handler',
-            'get_next_publish_seq_no',
         ]);
-
-        $channel->method('get_next_publish_seq_no')->willReturn(1);
 
         $connection = $this->createConnectionMock($channel);
 
