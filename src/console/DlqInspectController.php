@@ -6,9 +6,12 @@ use Yii;
 use yii\console\Controller;
 use illusiard\rabbitmq\dlq\DlqService;
 use PhpAmqpLib\Wire\AMQPTable;
+use illusiard\rabbitmq\components\RabbitMqService;
+use InvalidArgumentException;
 
 class DlqInspectController extends Controller
 {
+    public string $component = 'rabbitmq';
     public int $limit = 10;
     public int $json = 0;
     public int $ack = 0;
@@ -16,7 +19,14 @@ class DlqInspectController extends Controller
 
     public function options($actionID)
     {
-        return array_merge(parent::options($actionID), ['limit', 'json', 'ack', 'force']);
+        return array_merge(parent::options($actionID), ['component', 'limit', 'json', 'ack', 'force']);
+    }
+
+    public function optionAliases()
+    {
+        return array_merge(parent::optionAliases(), [
+            'c' => 'component',
+        ]);
     }
 
     public function actionIndex(string $queue): int
@@ -27,7 +37,7 @@ class DlqInspectController extends Controller
                 return 1;
             }
 
-            $service = Yii::createObject(DlqService::class, [Yii::$app->get('rabbitmq')]);
+            $service = Yii::createObject(DlqService::class, [$this->getRabbitService()]);
             $items = $service->inspect($queue, $this->limit, (bool)$this->ack);
 
             if ($this->json) {
@@ -80,5 +90,15 @@ class DlqInspectController extends Controller
         }
 
         return $value;
+    }
+
+    private function getRabbitService(): RabbitMqService
+    {
+        $service = Yii::$app->get($this->component);
+        if (!$service instanceof RabbitMqService) {
+            throw new InvalidArgumentException("Component '{$this->component}' must be an instance of RabbitMqService.");
+        }
+
+        return $service;
     }
 }

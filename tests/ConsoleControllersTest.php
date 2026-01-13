@@ -9,6 +9,9 @@ use illusiard\rabbitmq\console\DlqInspectController;
 use illusiard\rabbitmq\console\HealthcheckController;
 use illusiard\rabbitmq\console\SetupTopologyController;
 use illusiard\rabbitmq\dlq\DlqService;
+use illusiard\rabbitmq\console\ConsumeController;
+use illusiard\rabbitmq\console\DlqPurgeController;
+use illusiard\rabbitmq\console\DlqReplayController;
 
 class ConsoleControllersTest extends TestCase
 {
@@ -91,6 +94,48 @@ class ConsoleControllersTest extends TestCase
         $this->assertSame(1, $exitCode);
     }
 
+    public function testControllersExposeComponentOption(): void
+    {
+        $controllers = [
+            new ConsumeController('rabbitmq/consume', Yii::$app),
+            new DlqInspectController('rabbitmq/dlq-inspect', Yii::$app),
+            new DlqPurgeController('rabbitmq/dlq-purge', Yii::$app),
+            new DlqReplayController('rabbitmq/dlq-replay', Yii::$app),
+            new HealthcheckController('rabbitmq/healthcheck', Yii::$app),
+            new SetupTopologyController('rabbitmq/setup-topology', Yii::$app),
+        ];
+
+        foreach ($controllers as $controller) {
+            $options = $controller->options('index');
+            $this->assertContains('component', $options);
+
+            $aliases = $controller->optionAliases();
+            $this->assertArrayHasKey('c', $aliases);
+            $this->assertSame('component', $aliases['c']);
+        }
+    }
+
+    public function testComponentOverrideIsUsed(): void
+    {
+        $default = new ConsoleTestRabbitMqService();
+        $default->pingResult = false;
+
+        $custom = new ConsoleTestRabbitMqService();
+        $custom->pingResult = true;
+
+        Yii::$app->set('rabbitmq', $default);
+        Yii::$app->set('rabbit2', $custom);
+
+        $controller = new HealthcheckController('rabbitmq/healthcheck', Yii::$app);
+        $controller->component = 'rabbit2';
+
+        $exitCode = $controller->actionIndex();
+
+        $this->assertSame(0, $exitCode);
+        $this->assertFalse($default->pingCalled);
+        $this->assertTrue($custom->pingCalled);
+    }
+
     public function testSetupTopologyPassesDryRunAndStrict(): void
     {
         $service = new ConsoleTestRabbitMqService();
@@ -134,7 +179,7 @@ class ConsoleTestDlqService
     }
 }
 
-class ConsoleTestRabbitMqService extends \yii\base\Component
+class ConsoleTestRabbitMqService extends \illusiard\rabbitmq\components\RabbitMqService
 {
     public array $topology = [];
     public bool $pingResult = true;
@@ -142,9 +187,11 @@ class ConsoleTestRabbitMqService extends \yii\base\Component
     public array $profiles = [];
     public bool $setupTopologyCalled = false;
     public array $lastTopology = [];
+    public bool $pingCalled = false;
 
     public function ping(int $timeout = 3): bool
     {
+        $this->pingCalled = true;
         return $this->pingResult;
     }
 

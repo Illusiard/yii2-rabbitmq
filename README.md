@@ -149,7 +149,7 @@ ID берется из имени класса: `OrdersConsumer` -> `orders`, `A
 
 ## Console consume
 
-CLI `rabbitmq/consume` использует `RabbitMqService::consume` и ту же семантику пайплайна (middlewares, ExceptionClassifier, managed retry).
+CLI `rabbitmq/consume` запускает `ConsumeRunner` и использует ту же семантику пайплайна (middlewares, ExceptionClassifier, managed retry).
 
 Discovery включается в конфиге компонента:
 
@@ -173,6 +173,7 @@ Discovery включается в конфиге компонента:
 - `--managedRetry=1` и `--retryPolicy='{"maxAttempts":3,"retryQueues":[...],"deadQueue":"..."}'` (x-retry-count, retry/dead)
 - `--consumeFailFast=0|1`, `--fatalExceptionClasses=...`, `--recoverableExceptionClasses=...`
 - `--memoryLimitMb=...` (добавляет memory-limit middleware)
+- `--readyLock=/path/to/lock` (опциональный lock-файл готовности)
 
 Пример:
 
@@ -185,6 +186,15 @@ Discovery включается в конфиге компонента:
 
 ```bash
 ./yii rabbitmq/consume/consumers
+```
+
+## Multiple components / --component
+
+Все console-команды поддерживают `--component=<id>` для выбора нужного компонента RabbitMqService.
+
+```bash
+./yii rabbitmq/healthcheck --component=rabbitmq2
+./yii rabbitmq/consume orders --component=rabbitmq2 --readyLock=/tmp/consumer.lock
 ```
 
 ## Topology setup

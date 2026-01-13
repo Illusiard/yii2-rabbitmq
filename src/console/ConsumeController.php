@@ -11,9 +11,11 @@ use illusiard\rabbitmq\consumer\ConsumerInterface;
 use illusiard\rabbitmq\exceptions\FatalException;
 use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
 use illusiard\rabbitmq\orchestration\RunnerOptions;
+use InvalidArgumentException;
 
 class ConsumeController extends Controller
 {
+    public string $component = 'rabbitmq';
     public ?int      $managedRetry                = null;
     public ?string   $retryPolicy                 = null;
     public ?int      $consumeFailFast             = null;
@@ -21,15 +23,26 @@ class ConsumeController extends Controller
     public ?string   $recoverableExceptionClasses = null;
     private ?Closure $onStart                     = null;
     private ?RunnerOptions $runnerOptions         = null;
+    public ?string $readyLock                     = null;
 
     public function options($actionID)
     {
         return array_merge(parent::options($actionID), [
+            'component',
             'managedRetry',
             'retryPolicy',
             'consumeFailFast',
             'fatalExceptionClasses',
             'recoverableExceptionClasses',
+            'readyLock',
+        ]);
+    }
+
+    public function optionAliases()
+    {
+        return array_merge(parent::optionAliases(), [
+            'c' => 'component',
+            'r' => 'readyLock',
         ]);
     }
 
@@ -38,8 +51,7 @@ class ConsumeController extends Controller
         $memoryLimitBytes  = $memoryLimitMb * 1024 * 1024;
 
         try {
-            /** @var RabbitMqService $rabbit */
-            $rabbit = Yii::$app->rabbitmq;
+            $rabbit = $this->getRabbitService();
             if (!$this->isDiscoveryEnabled($rabbit->discovery ?? [])) {
                 $this->stderr("Discovery is disabled; enable it to run consumers by id.\n");
 
@@ -75,6 +87,9 @@ class ConsumeController extends Controller
 
             Yii::info('Consumer started for queue: ' . $queue, 'rabbitmq');
             $runnerOptions = $this->runnerOptions ?? new RunnerOptions();
+            if ($this->readyLock !== null && $this->readyLock !== '') {
+                $runnerOptions->lockFilePath = $this->readyLock;
+            }
             if ($runnerOptions->consumerId === null) {
                 $runnerOptions->consumerId = $consumerId;
             }
@@ -92,7 +107,7 @@ class ConsumeController extends Controller
 
     public function actionConsumers(): int
     {
-        $rabbit = Yii::$app->rabbitmq;
+        $rabbit = $this->getRabbitService();
         if (!$this->isDiscoveryEnabled($rabbit->discovery ?? [])) {
             $this->stderr("Discovery is disabled; enable it to list consumers.\n");
 
@@ -191,5 +206,15 @@ class ConsumeController extends Controller
     public function setRunnerOptions(?RunnerOptions $options): void
     {
         $this->runnerOptions = $options;
+    }
+
+    private function getRabbitService(): RabbitMqService
+    {
+        $service = Yii::$app->get($this->component);
+        if (!$service instanceof RabbitMqService) {
+            throw new InvalidArgumentException("Component '{$this->component}' must be an instance of RabbitMqService.");
+        }
+
+        return $service;
     }
 }

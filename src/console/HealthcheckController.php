@@ -4,21 +4,31 @@ namespace illusiard\rabbitmq\console;
 
 use Yii;
 use yii\console\Controller;
+use illusiard\rabbitmq\components\RabbitMqService;
+use InvalidArgumentException;
 
 class HealthcheckController extends Controller
 {
+    public string $component = 'rabbitmq';
     public string $profile = 'default';
     public int $timeout = 3;
     public int $json = 0;
 
     public function options($actionID)
     {
-        return array_merge(parent::options($actionID), ['profile', 'timeout', 'json']);
+        return array_merge(parent::options($actionID), ['component', 'profile', 'timeout', 'json']);
+    }
+
+    public function optionAliases()
+    {
+        return array_merge(parent::optionAliases(), [
+            'c' => 'component',
+        ]);
     }
 
     public function actionIndex(): int
     {
-        $rabbit = Yii::$app->get('rabbitmq');
+        $rabbit = $this->getRabbitService();
 
         try {
             if (!empty($rabbit?->profiles)) {
@@ -51,5 +61,15 @@ class HealthcheckController extends Controller
         }
 
         return $ok ? 0 : 1;
+    }
+
+    private function getRabbitService(): RabbitMqService
+    {
+        $service = Yii::$app->get($this->component);
+        if (!$service instanceof RabbitMqService) {
+            throw new InvalidArgumentException("Component '{$this->component}' must be an instance of RabbitMqService.");
+        }
+
+        return $service;
     }
 }

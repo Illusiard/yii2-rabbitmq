@@ -4,21 +4,31 @@ namespace illusiard\rabbitmq\console;
 
 use Yii;
 use yii\console\Controller;
+use illusiard\rabbitmq\components\RabbitMqService;
+use InvalidArgumentException;
 
 class SetupTopologyController extends Controller
 {
+    public string $component = 'rabbitmq';
     public bool $dryRun = false;
     public bool $strict = false;
 
     public function options($actionID)
     {
-        return array_merge(parent::options($actionID), ['dryRun', 'strict']);
+        return array_merge(parent::options($actionID), ['component', 'dryRun', 'strict']);
+    }
+
+    public function optionAliases()
+    {
+        return array_merge(parent::optionAliases(), [
+            'c' => 'component',
+        ]);
     }
 
     public function actionIndex(): int
     {
         try {
-            $rabbit = Yii::$app->get('rabbitmq');
+            $rabbit = $this->getRabbitService();
             $topology = $rabbit->topology ?? [];
 
             if (empty($topology)) {
@@ -38,5 +48,15 @@ class SetupTopologyController extends Controller
         }
 
         return 0;
+    }
+
+    private function getRabbitService(): RabbitMqService
+    {
+        $service = Yii::$app->get($this->component);
+        if (!$service instanceof RabbitMqService) {
+            throw new InvalidArgumentException("Component '{$this->component}' must be an instance of RabbitMqService.");
+        }
+
+        return $service;
     }
 }
