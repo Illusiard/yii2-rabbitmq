@@ -94,9 +94,46 @@ class ConsumeControllerTest extends TestCase
             "<?php\n\nnamespace app\\queues;\n\nclass RabbitMqHandler\n{\n    public function __invoke(string \$body, array \$meta): bool\n    {\n        return true;\n    }\n}\n"
         );
 
+        $consumerTemplate = <<<'PHP'
+<?php
+
+namespace app\services\rabbitmq\consumers;
+
+use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
+
+class OrdersConsumer implements ConsumerInterface
+{
+    public function getQueue(): string
+    {
+        return 'orders';
+    }
+
+    public function getHandler()
+    {
+        return \app\queues\RabbitMqHandler::class;
+    }
+
+    public function getOptions(): array
+    {
+        return [
+            'prefetch' => 3,
+            'consumeMiddlewares' => [
+                ['class' => '%s', 'memoryLimitBytes' => 1024],
+            ],
+        ];
+    }
+
+    public function getMiddlewares(): array
+    {
+        return [];
+    }
+}
+PHP
+        ;
+
         file_put_contents(
             $consumerDir . '/OrdersConsumer.php',
-            "<?php\n\nnamespace app\\services\\rabbitmq\\consumers;\n\nuse illusiard\\rabbitmq\\consumer\\ConsumerInterface;\n\nclass OrdersConsumer implements ConsumerInterface\n{\n    public function queue(): string\n    {\n        return 'orders';\n    }\n\n    public function handler()\n    {\n        return \\app\\queues\\RabbitMqHandler::class;\n    }\n\n    public function options(): array\n    {\n        return [\n            'prefetch' => 3,\n            'consumeMiddlewares' => [\n                ['class' => '" . MemoryLimitMiddleware::class . "', 'memoryLimitBytes' => 1024],\n            ],\n        ];\n    }\n}\n"
+            sprintf($consumerTemplate, MemoryLimitMiddleware::class)
         );
 
         Yii::setAlias('@app', $this->tempRoot);

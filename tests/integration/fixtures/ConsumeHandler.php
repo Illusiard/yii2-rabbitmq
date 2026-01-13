@@ -1,6 +1,6 @@
 <?php
 
-namespace illusiard\rabbitmq\tests\integration\fixtures;
+namespace app\tests\integration\fixtures;
 
 class ConsumeHandler
 {

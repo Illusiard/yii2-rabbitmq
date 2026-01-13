@@ -149,7 +149,8 @@ ID берется из имени класса: `OrdersConsumer` -> `orders`, `A
 
 ## Console consume
 
-CLI `rabbitmq/consume` запускает `ConsumeRunner` и использует ту же семантику пайплайна (middlewares, ExceptionClassifier, managed retry).
+CLI `rabbitmq/consume` запускает `ConsumeRunner` и использует ту же семантику пайплайна (middlewares, ExceptionClassifier, managed retry).  
+Запуск идёт по `consumer-id`, полученному из discovery.
 
 Discovery включается в конфиге компонента:
 
@@ -159,7 +160,12 @@ Discovery включается в конфиге компонента:
         'class' => illusiard\\rabbitmq\\components\\RabbitMqService::class,
         'discovery' => [
             'enabled' => true,
-            'paths' => ['@app/services/rabbitmq/consumers'],
+            'paths' => [
+                '@app/services/rabbitmq/consumers',
+                '@app/services/rabbitmq/publishers',
+                '@app/services/rabbitmq/middlewares',
+                '@app/services/rabbitmq/handlers', // опционально
+            ],
             'cache' => 'cache',
             'cacheTtl' => 300,
         ],
@@ -167,7 +173,16 @@ Discovery включается в конфиге компонента:
 ],
 ```
 
-Если discovery выключен, CLI запускает только по id и вернет ошибку без сканирования.
+Если discovery выключен или paths не заданы, CLI вернет ошибку.
+
+Структура папок (как migrations, из `@app` и base namespace `app`):
+
+```
+services/rabbitmq/consumers/OrdersConsumer.php
+services/rabbitmq/publishers/OrdersPublisher.php
+services/rabbitmq/middlewares/TraceIdMiddleware.php
+services/rabbitmq/handlers/OrdersHandler.php
+```
 
 Ключевые опции CLI:
 - `--managedRetry=1` и `--retryPolicy='{"maxAttempts":3,"retryQueues":[...],"deadQueue":"..."}'` (x-retry-count, retry/dead)
@@ -185,7 +200,14 @@ Discovery включается в конфиге компонента:
 Список найденных consumers:
 
 ```bash
-./yii rabbitmq/consume/consumers
+./yii rabbitmq/consumers
+```
+
+Список publishers/middlewares:
+
+```bash
+./yii rabbitmq/publishers
+./yii rabbitmq/middlewares
 ```
 
 ## Multiple components / --component

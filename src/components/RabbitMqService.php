@@ -3,7 +3,6 @@
 namespace illusiard\rabbitmq\components;
 
 use illusiard\rabbitmq\amqp\AmqpConsumer;
-use InvalidArgumentException;
 use Yii;
 use yii\base\Component;
 use illusiard\rabbitmq\amqp\AmqpConnection;
@@ -26,6 +25,13 @@ use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
 use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
 use illusiard\rabbitmq\amqp\LoggingReturnHandler;
 use illusiard\rabbitmq\orchestration\ConsumeRunner;
+use illusiard\rabbitmq\definitions\discovery\DiscoveryConfig;
+use illusiard\rabbitmq\definitions\discovery\DefinitionsDiscovery;
+use illusiard\rabbitmq\definitions\registry\ConsumerRegistry as DefinitionConsumerRegistry;
+use illusiard\rabbitmq\definitions\registry\PublisherRegistry as DefinitionPublisherRegistry;
+use illusiard\rabbitmq\definitions\registry\MiddlewareRegistry as DefinitionMiddlewareRegistry;
+use illusiard\rabbitmq\definitions\registry\HandlerRegistry as DefinitionHandlerRegistry;
+use InvalidArgumentException;
 
 class RabbitMqService extends Component
 {
@@ -68,6 +74,10 @@ class RabbitMqService extends Component
     private ?ReturnHandlerInterface     $returnHandlerInstance = null;
     private ?string                     $activeProfile      = null;
     private ?string                     $lastError          = null;
+    private ?DefinitionConsumerRegistry $consumerRegistry   = null;
+    private ?DefinitionPublisherRegistry $publisherRegistry = null;
+    private ?DefinitionMiddlewareRegistry $middlewareRegistry = null;
+    private ?DefinitionHandlerRegistry $handlerRegistry = null;
 
     public function init()
     {
@@ -269,6 +279,62 @@ class RabbitMqService extends Component
     public function createRunner(): ConsumeRunner
     {
         return new ConsumeRunner($this);
+    }
+
+    public function getConsumerRegistry(): DefinitionConsumerRegistry
+    {
+        if ($this->consumerRegistry !== null) {
+            return $this->consumerRegistry;
+        }
+
+        $config = $this->getDiscoveryConfigOrThrow();
+        $discovery = new DefinitionsDiscovery($config);
+        $this->consumerRegistry = $discovery->discoverConsumers();
+
+        return $this->consumerRegistry;
+    }
+
+    public function getPublisherRegistry(): DefinitionPublisherRegistry
+    {
+        if ($this->publisherRegistry !== null) {
+            return $this->publisherRegistry;
+        }
+
+        $config = $this->getDiscoveryConfigOrThrow();
+        $discovery = new DefinitionsDiscovery($config);
+        $this->publisherRegistry = $discovery->discoverPublishers();
+
+        return $this->publisherRegistry;
+    }
+
+    public function getMiddlewareRegistry(): DefinitionMiddlewareRegistry
+    {
+        if ($this->middlewareRegistry !== null) {
+            return $this->middlewareRegistry;
+        }
+
+        $config = $this->getDiscoveryConfigOrThrow();
+        $discovery = new DefinitionsDiscovery($config);
+        $this->middlewareRegistry = $discovery->discoverMiddlewares();
+
+        return $this->middlewareRegistry;
+    }
+
+    public function getHandlerRegistry(): DefinitionHandlerRegistry
+    {
+        if ($this->handlerRegistry !== null) {
+            return $this->handlerRegistry;
+        }
+
+        $config = $this->getDiscoveryConfigOrThrow();
+        if (!$config->hasHandlersPath()) {
+            throw new InvalidArgumentException('Handler discovery is disabled because no handlers path is configured.');
+        }
+
+        $discovery = new DefinitionsDiscovery($config);
+        $this->handlerRegistry = $discovery->discoverHandlers();
+
+        return $this->handlerRegistry;
     }
 
     private function normalizeConsumeOptions(array $options): array
@@ -631,5 +697,23 @@ class RabbitMqService extends Component
         $this->consumePipeline    = null;
         $this->returnHandlerInstance = null;
         $this->lastError          = null;
+        $this->consumerRegistry   = null;
+        $this->publisherRegistry  = null;
+        $this->middlewareRegistry = null;
+        $this->handlerRegistry    = null;
+    }
+
+    private function getDiscoveryConfigOrThrow(): DiscoveryConfig
+    {
+        $config = new DiscoveryConfig($this->discovery);
+        if (!$config->isEnabled()) {
+            throw new InvalidArgumentException('Discovery is disabled.');
+        }
+
+        if (empty($config->getPaths())) {
+            throw new InvalidArgumentException('Discovery paths are not configured.');
+        }
+
+        return $config;
     }
 }

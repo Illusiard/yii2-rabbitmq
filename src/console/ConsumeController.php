@@ -6,8 +6,9 @@ use Closure;
 use illusiard\rabbitmq\components\RabbitMqService;
 use Yii;
 use yii\console\Controller;
-use illusiard\rabbitmq\consumer\ConsumerDiscovery;
-use illusiard\rabbitmq\consumer\ConsumerInterface;
+use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
+use illusiard\rabbitmq\definitions\handler\HandlerInterface;
+use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\exceptions\FatalException;
 use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
 use illusiard\rabbitmq\orchestration\RunnerOptions;
@@ -52,13 +53,13 @@ class ConsumeController extends Controller
 
         try {
             $rabbit = $this->getRabbitService();
-            if (!$this->isDiscoveryEnabled($rabbit->discovery ?? [])) {
+            try {
+                $registry = $rabbit->getConsumerRegistry();
+            } catch (\Throwable $e) {
                 $this->stderr("Discovery is disabled; enable it to run consumers by id.\n");
-
                 return 1;
             }
 
-            $registry      = (new ConsumerDiscovery($rabbit->discovery))->discover();
             $consumerClass = $registry->get($consumerId);
             if ($consumerClass === null) {
                 $this->stderr("Consumer not found: {$consumerId}\n");
@@ -68,12 +69,12 @@ class ConsumeController extends Controller
 
             $consumerInstance = Yii::createObject($consumerClass);
             if (!$consumerInstance instanceof ConsumerInterface) {
-                $this->stderr("Consumer class '{$consumerClass}' must implement ConsumerInterface.\n");
+                $this->stderr("Consumer class '{$consumerClass}' must implement definitions ConsumerInterface.\n");
 
                 return 1;
             }
 
-            $optionsRaw = $consumerInstance->options();
+            $optionsRaw = $consumerInstance->getOptions();
             if (!is_array($optionsRaw)) {
                 $this->stderr("Consumer options must be an array.\n");
 
@@ -82,8 +83,9 @@ class ConsumeController extends Controller
 
             $options = $this->buildConsumeOptions($optionsRaw, $memoryLimitBytes);
 
-            $queue   = $consumerInstance->queue();
-            $handler = $consumerInstance->handler();
+            $queue   = $consumerInstance->getQueue();
+            $handler = $this->normalizeHandler($rabbit, $consumerInstance->getHandler());
+            $options = $this->applyConsumerMiddlewares($rabbit, $options, $consumerInstance->getMiddlewares());
 
             Yii::info('Consumer started for queue: ' . $queue, 'rabbitmq');
             $runnerOptions = $this->runnerOptions ?? new RunnerOptions();
@@ -108,13 +110,14 @@ class ConsumeController extends Controller
     public function actionConsumers(): int
     {
         $rabbit = $this->getRabbitService();
-        if (!$this->isDiscoveryEnabled($rabbit->discovery ?? [])) {
-            $this->stderr("Discovery is disabled; enable it to list consumers.\n");
 
+        try {
+            $registry = $rabbit->getConsumerRegistry();
+        } catch (\Throwable $e) {
+            $this->stderr("Discovery is disabled; enable it to list consumers.\n");
             return 1;
         }
 
-        $registry  = (new ConsumerDiscovery($rabbit->discovery))->discover();
         $consumers = $registry->all();
         if (empty($consumers)) {
             $this->stdout("No consumers found.\n");
@@ -165,17 +168,6 @@ class ConsumeController extends Controller
         return $options;
     }
 
-    private function isDiscoveryEnabled(array $config): bool
-    {
-        if (!($config['enabled'] ?? false)) {
-            return false;
-        }
-
-        $paths = $config['paths'] ?? [];
-
-        return is_array($paths) && !empty($paths);
-    }
-
     private function parseClassList(string $value): array
     {
         $items = array_map('trim', explode(',', $value));
@@ -216,5 +208,87 @@ class ConsumeController extends Controller
         }
 
         return $service;
+    }
+
+    private function normalizeHandler(RabbitMqService $service, $handler)
+    {
+        if (is_string($handler) && is_subclass_of($handler, HandlerInterface::class)) {
+            $handler = Yii::createObject($handler);
+        }
+
+        if ($handler instanceof HandlerInterface) {
+            return function (string $body, array $meta) use ($service, $handler): bool {
+                $envelope = $service->decodeEnvelope($body, $meta);
+                $result = $handler->handle($envelope);
+                $normalized = ConsumeResult::normalizeHandlerResult($result);
+                return $normalized->getAction() === ConsumeResult::ACTION_ACK;
+            };
+        }
+
+        return $handler;
+    }
+
+    private function applyConsumerMiddlewares(RabbitMqService $service, array $options, array $middlewares): array
+    {
+        if (empty($middlewares)) {
+            return $options;
+        }
+
+        $registry = null;
+        try {
+            $registry = $service->getMiddlewareRegistry();
+        } catch (\Throwable $e) {
+        }
+
+        $resolved = [];
+        foreach ($middlewares as $middleware) {
+            if (is_string($middleware)) {
+                if (class_exists($middleware)) {
+                    $resolved[] = $middleware;
+                    continue;
+                }
+
+                if ($registry !== null) {
+                    $fqcn = $registry->get($middleware);
+                    if ($fqcn === null) {
+                        throw new InvalidArgumentException("Middleware not found: {$middleware}");
+                    }
+                    $resolved[] = $fqcn;
+                    continue;
+                }
+
+                throw new InvalidArgumentException("Middleware not found: {$middleware}");
+            }
+
+            if (is_array($middleware)) {
+                if (isset($middleware['class']) && is_string($middleware['class'])) {
+                    $resolved[] = $middleware;
+                    continue;
+                }
+
+                if (isset($middleware['id']) && is_string($middleware['id']) && $registry !== null) {
+                    $fqcn = $registry->get($middleware['id']);
+                    if ($fqcn === null) {
+                        throw new InvalidArgumentException("Middleware not found: {$middleware['id']}");
+                    }
+                    $middleware['class'] = $fqcn;
+                    unset($middleware['id']);
+                    $resolved[] = $middleware;
+                    continue;
+                }
+            }
+
+            $resolved[] = $middleware;
+        }
+
+        $existing = $options['consumeMiddlewares'] ?? $options['middlewares'] ?? [];
+        if (!is_array($existing)) {
+            $existing = [];
+        }
+
+        $options['consumeMiddlewares'] = array_merge($existing, $resolved);
+        unset($options['middlewares']);
+
+        return $options;
     }
 }

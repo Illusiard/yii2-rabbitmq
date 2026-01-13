@@ -12,6 +12,9 @@ use illusiard\rabbitmq\dlq\DlqService;
 use illusiard\rabbitmq\console\ConsumeController;
 use illusiard\rabbitmq\console\DlqPurgeController;
 use illusiard\rabbitmq\console\DlqReplayController;
+use illusiard\rabbitmq\console\ConsumersController;
+use illusiard\rabbitmq\console\PublishersController;
+use illusiard\rabbitmq\console\MiddlewaresController;
 
 class ConsoleControllersTest extends TestCase
 {
@@ -98,6 +101,9 @@ class ConsoleControllersTest extends TestCase
     {
         $controllers = [
             new ConsumeController('rabbitmq/consume', Yii::$app),
+            new ConsumersController('rabbitmq/consumers', Yii::$app),
+            new PublishersController('rabbitmq/publishers', Yii::$app),
+            new MiddlewaresController('rabbitmq/middlewares', Yii::$app),
             new DlqInspectController('rabbitmq/dlq-inspect', Yii::$app),
             new DlqPurgeController('rabbitmq/dlq-purge', Yii::$app),
             new DlqReplayController('rabbitmq/dlq-replay', Yii::$app),

@@ -1,13 +1,13 @@
 <?php
 
-namespace illusiard\rabbitmq\tests\integration\fixtures;
+namespace app\tests\integration\fixtures;
 
-use illusiard\rabbitmq\consumer\ConsumerInterface;
+use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
 use RuntimeException;
 
 class ConsumeConsumer implements ConsumerInterface
 {
-    public function queue(): string
+    public function getQueue(): string
     {
         $queue = getenv('CONSUME_QUEUE');
         if (!$queue) {
@@ -17,17 +17,22 @@ class ConsumeConsumer implements ConsumerInterface
         return $queue;
     }
 
-    public function handler()
+    public function getHandler()
     {
         return ConsumeHandler::class;
     }
 
-    public function options(): array
+    public function getOptions(): array
     {
         $prefetch = getenv('CONSUME_PREFETCH') ? (int)getenv('CONSUME_PREFETCH') : 1;
 
         return [
             'prefetch' => $prefetch,
         ];
+    }
+
+    public function getMiddlewares(): array
+    {
+        return [];
     }
 }
