@@ -6,11 +6,11 @@ use Closure;
 use illusiard\rabbitmq\components\RabbitMqService;
 use Yii;
 use yii\console\Controller;
-use illusiard\rabbitmq\amqp\AmqpConsumer;
 use illusiard\rabbitmq\consumer\ConsumerDiscovery;
 use illusiard\rabbitmq\consumer\ConsumerInterface;
 use illusiard\rabbitmq\exceptions\FatalException;
 use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
+use illusiard\rabbitmq\orchestration\RunnerOptions;
 
 class ConsumeController extends Controller
 {
@@ -20,6 +20,7 @@ class ConsumeController extends Controller
     public ?string   $fatalExceptionClasses       = null;
     public ?string   $recoverableExceptionClasses = null;
     private ?Closure $onStart                     = null;
+    private ?RunnerOptions $runnerOptions         = null;
 
     public function options($actionID)
     {
@@ -35,21 +36,6 @@ class ConsumeController extends Controller
     public function actionIndex(string $consumerId, int $memoryLimitMb = 256): int
     {
         $memoryLimitBytes  = $memoryLimitMb * 1024 * 1024;
-        $shutdownRequested = false;
-
-        if (function_exists('pcntl_signal')) {
-            pcntl_async_signals(true);
-            pcntl_signal(SIGTERM, function () use (&$shutdownRequested) {
-                $shutdownRequested = true;
-                Yii::warning('Shutdown requested (SIGTERM)', 'rabbitmq');
-            });
-            pcntl_signal(SIGINT, function () use (&$shutdownRequested) {
-                $shutdownRequested = true;
-                Yii::warning('Shutdown requested (SIGINT)', 'rabbitmq');
-            });
-        } else {
-            Yii::warning('pcntl extension is not available; graceful shutdown disabled', 'rabbitmq');
-        }
 
         try {
             /** @var RabbitMqService $rabbit */
@@ -84,18 +70,16 @@ class ConsumeController extends Controller
 
             $options = $this->buildConsumeOptions($optionsRaw, $memoryLimitBytes);
 
-            $consumer = $rabbit->getConnection()->getConsumer();
-            if ($consumer instanceof AmqpConsumer) {
-                $consumer->setStopChecker(function () use (&$shutdownRequested) {
-                    return $shutdownRequested;
-                });
-            }
-
             $queue   = $consumerInstance->queue();
             $handler = $consumerInstance->handler();
 
             Yii::info('Consumer started for queue: ' . $queue, 'rabbitmq');
-            $rabbit->consume($queue, $handler, $options);
+            $runnerOptions = $this->runnerOptions ?? new RunnerOptions();
+            if ($runnerOptions->consumerId === null) {
+                $runnerOptions->consumerId = $consumerId;
+            }
+
+            $exitCode = $rabbit->createRunner()->run($queue, $handler, $options, $runnerOptions);
             Yii::info('Consumer stopped for queue: ' . $queue, 'rabbitmq');
         } catch (FatalException $e) {
             $this->stderr($e->getMessage() . PHP_EOL);
@@ -103,7 +87,7 @@ class ConsumeController extends Controller
             return 1;
         }
 
-        return 0;
+        return $exitCode ?? 0;
     }
 
     public function actionConsumers(): int
@@ -202,5 +186,10 @@ class ConsumeController extends Controller
     public function setOnStart(?Closure $param): void
     {
         $this->onStart = $param;
+    }
+
+    public function setRunnerOptions(?RunnerOptions $options): void
+    {
+        $this->runnerOptions = $options;
     }
 }

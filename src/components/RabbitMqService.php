@@ -25,6 +25,7 @@ use illusiard\rabbitmq\middleware\PublishMiddlewareInterface;
 use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
 use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
 use illusiard\rabbitmq\amqp\LoggingReturnHandler;
+use illusiard\rabbitmq\orchestration\ConsumeRunner;
 
 class RabbitMqService extends Component
 {
@@ -263,6 +264,11 @@ class RabbitMqService extends Component
         }
 
         $consumer->consume($queue, $wrappedHandler, $prefetch);
+    }
+
+    public function createRunner(): ConsumeRunner
+    {
+        return new ConsumeRunner($this);
     }
 
     private function normalizeConsumeOptions(array $options): array

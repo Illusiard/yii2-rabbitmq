@@ -117,22 +117,43 @@ class ConsumeControllerTest extends TestCase
     }
 }
 
-class FakeRabbitMqService extends \yii\base\Component
+class FakeRabbitMqService extends \illusiard\rabbitmq\components\RabbitMqService
 {
     public array $consumeArgs = [];
-    public array $discovery = [];
 
     public function consume(string $queue, $handler, array $options = []): void
     {
         $this->consumeArgs = [$queue, $handler, $options];
     }
 
-    public function getConnection()
+    public function getConnection(): \illusiard\rabbitmq\contracts\ConnectionInterface
     {
-        return new class {
-            public function getConsumer()
+        return new class implements \illusiard\rabbitmq\contracts\ConnectionInterface {
+            public function connect(): void
             {
-                return null;
+            }
+
+            public function isConnected(): bool
+            {
+                return false;
+            }
+
+            public function close(): void
+            {
+            }
+
+            public function getPublisher(): \illusiard\rabbitmq\contracts\PublisherInterface
+            {
+                throw new \RuntimeException('Not used in tests.');
+            }
+
+            public function getConsumer(): \illusiard\rabbitmq\contracts\ConsumerInterface
+            {
+                return new class implements \illusiard\rabbitmq\contracts\ConsumerInterface {
+                    public function consume(string $queue, callable $handler, int $prefetch = 1): void
+                    {
+                    }
+                };
             }
         };
     }

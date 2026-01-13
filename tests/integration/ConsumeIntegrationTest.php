@@ -66,6 +66,7 @@ class ConsumeIntegrationTest extends IntegrationTestCase
         $exitCode = $this->waitForProcessExit($process, $pipes, 10);
 
         $this->assertSame(0, $exitCode);
+        $this->assertFileDoesNotExist($readyFile);
 
         $lines = file_exists($logFile) ? file($logFile, FILE_IGNORE_NEW_LINES) : [];
         $this->assertCount(1, $lines);
@@ -84,10 +85,7 @@ class ConsumeIntegrationTest extends IntegrationTestCase
 
         while (microtime(true) < $deadline) {
             if (is_file($path)) {
-                $data = @file_get_contents($path);
-                if (is_string($data) && str_contains($data, 'READY')) {
-                    return true;
-                }
+                return true;
             }
             usleep(10_000); // 10ms
         }

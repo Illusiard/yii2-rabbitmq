@@ -4,6 +4,7 @@ require __DIR__ . '/../bootstrap.php';
 
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\console\ConsumeController;
+use illusiard\rabbitmq\orchestration\RunnerOptions;
 
 $consumerId = getenv('CONSUMER_ID');
 $memoryLimit = getenv('CONSUME_MEMORY_MB') ? (int)getenv('CONSUME_MEMORY_MB') : 256;
@@ -36,14 +37,11 @@ if (Yii::$app) {
     Yii::$app->set('rabbitmq', $service);
 }
 
-fwrite(STDOUT, "READY\n");
-fflush(STDOUT);
-
 $controller = new ConsumeController('consume', Yii::$app);
-$controller->setOnStart(function () use ($readyFile) {
-    if ($readyFile) {
-        @file_put_contents($readyFile, "READY\n", LOCK_EX);
-    }
-});
+$runnerOptions = null;
+if ($readyFile) {
+    $runnerOptions = new RunnerOptions($readyFile, null, $consumerId);
+}
+$controller->setRunnerOptions($runnerOptions);
 $code = $controller->actionIndex($consumerId, $memoryLimit);
 exit($code);
