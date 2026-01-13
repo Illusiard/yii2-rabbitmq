@@ -7,8 +7,6 @@ use illusiard\rabbitmq\components\RabbitMqService;
 use Yii;
 use yii\console\Controller;
 use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
-use illusiard\rabbitmq\definitions\handler\HandlerInterface;
-use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\exceptions\FatalException;
 use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
 use illusiard\rabbitmq\orchestration\RunnerOptions;
@@ -84,8 +82,8 @@ class ConsumeController extends Controller
             $options = $this->buildConsumeOptions($optionsRaw, $memoryLimitBytes);
 
             $queue   = $consumerInstance->getQueue();
-            $handler = $this->normalizeHandler($rabbit, $consumerInstance->getHandler());
-            $options = $this->applyConsumerMiddlewares($rabbit, $options, $consumerInstance->getMiddlewares());
+            $handler = $consumerInstance->getHandler();
+            $options['consumer'] = $consumerInstance;
 
             Yii::info('Consumer started for queue: ' . $queue, 'rabbitmq');
             $runnerOptions = $this->runnerOptions ?? new RunnerOptions();
@@ -210,85 +208,5 @@ class ConsumeController extends Controller
         return $service;
     }
 
-    private function normalizeHandler(RabbitMqService $service, $handler)
-    {
-        if (is_string($handler) && is_subclass_of($handler, HandlerInterface::class)) {
-            $handler = Yii::createObject($handler);
-        }
-
-        if ($handler instanceof HandlerInterface) {
-            return function (string $body, array $meta) use ($service, $handler): bool {
-                $envelope = $service->decodeEnvelope($body, $meta);
-                $result = $handler->handle($envelope);
-                $normalized = ConsumeResult::normalizeHandlerResult($result);
-                return $normalized->getAction() === ConsumeResult::ACTION_ACK;
-            };
-        }
-
-        return $handler;
-    }
-
-    private function applyConsumerMiddlewares(RabbitMqService $service, array $options, array $middlewares): array
-    {
-        if (empty($middlewares)) {
-            return $options;
-        }
-
-        $registry = null;
-        try {
-            $registry = $service->getMiddlewareRegistry();
-        } catch (\Throwable $e) {
-        }
-
-        $resolved = [];
-        foreach ($middlewares as $middleware) {
-            if (is_string($middleware)) {
-                if (class_exists($middleware)) {
-                    $resolved[] = $middleware;
-                    continue;
-                }
-
-                if ($registry !== null) {
-                    $fqcn = $registry->get($middleware);
-                    if ($fqcn === null) {
-                        throw new InvalidArgumentException("Middleware not found: {$middleware}");
-                    }
-                    $resolved[] = $fqcn;
-                    continue;
-                }
-
-                throw new InvalidArgumentException("Middleware not found: {$middleware}");
-            }
-
-            if (is_array($middleware)) {
-                if (isset($middleware['class']) && is_string($middleware['class'])) {
-                    $resolved[] = $middleware;
-                    continue;
-                }
-
-                if (isset($middleware['id']) && is_string($middleware['id']) && $registry !== null) {
-                    $fqcn = $registry->get($middleware['id']);
-                    if ($fqcn === null) {
-                        throw new InvalidArgumentException("Middleware not found: {$middleware['id']}");
-                    }
-                    $middleware['class'] = $fqcn;
-                    unset($middleware['id']);
-                    $resolved[] = $middleware;
-                    continue;
-                }
-            }
-
-            $resolved[] = $middleware;
-        }
-
-        $existing = $options['consumeMiddlewares'] ?? $options['middlewares'] ?? [];
-        if (!is_array($existing)) {
-            $existing = [];
-        }
-
-        $options['consumeMiddlewares'] = array_merge($existing, $resolved);
-        unset($options['middlewares']);
-
-        return $options;
-    }
+    // Consumer/handler normalization is handled by ConsumeRunner.
 }

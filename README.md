@@ -74,8 +74,8 @@ $rabbit->publish('Hello', 'exchange', 'route.key', [
   - `dlq-inspect` по умолчанию НЕ удаляет сообщения (`basic.get` + `nack requeue=true`).
   - Разрушающий режим только с `--ack=1 --force=1`.
 - Consumer fail-fast semantics:
-  - Fatal исключения валят процесс (если `consumeFailFast=true`).
-  - Recoverable исключения означают неуспешную обработку (`false`) и включают retry/dead правила.
+  - Fatal исключения приводят к `ConsumeResult::stop()` (если `consumeFailFast=true`).
+  - Recoverable исключения приводят к `ConsumeResult::retry()` и включают retry/dead правила.
 
 ## Profiles (multi-connection)
 
@@ -305,11 +305,11 @@ $rabbit->tick(0.1);
 
 ## Managed retry
 
-Если `managedRetry=true`, то при `handler=false` выполняется `RetryDecider` и:
+Если `managedRetry=true`, то при `handler=false` или `ConsumeResult::retry()` применяется retry policy и:
 
-- `retry` — перепубликация в `retryQueue` через default exchange (`exchange=''`, `routingKey=queueName`), затем ACK
-- `dead` — перепубликация в `deadQueue` (если указана), затем ACK
-- `reject` — `basic_reject(false)`
+- retry — перепубликация в retry-очередь через default exchange (`exchange=''`, `routingKey=queueName`), затем ACK
+- dead — перепубликация в dead-очередь (если указана), затем ACK
+- reject — `basic_reject(false)`
 
 Пример политики:
 
@@ -325,26 +325,9 @@ $rabbit->tick(0.1);
 ],
 ```
 
-Помощник для повторных отправок (в handler):
-
-```php
-<?php
-
-use illusiard\rabbitmq\retry\RetryDecider;
-
-$decider = new RetryDecider();
-$decision = $decider->decide($meta, [
-    'maxAttempts' => 3,
-    'retryQueues' => [
-        ['name' => 'orders.retry.5s', 'ttlMs' => 5000],
-        ['name' => 'orders.retry.30s', 'ttlMs' => 30000],
-    ],
-    'deadQueue' => 'orders.dead',
-]);
-
-// Если handler возвращает false, потребитель отклонит запрос.
-return false;
-```
+Handler может возвращать `ConsumeResult` или legacy `bool`:
+- `true` → ACK
+- `false` → RETRY (дальше применяется retry policy)
 
 ## Serialization & Envelope
 
@@ -484,7 +467,7 @@ Connection refused / heartbeat timeouts:
 - проверьте доступность хоста/порта, firewall, а также `heartbeat` и таймауты
 
 Consumer exits on exception:
-- fatal исключения завершают процесс (fail-fast), recoverable возвращают `false` и запускают retry/dead
+- fatal исключения завершают процесс (fail-fast), recoverable возвращают `ConsumeResult::retry()` и запускают retry/dead
 - настройте `consumeFailFast`, `fatalExceptionClasses`, `recoverableExceptionClasses`
 
 Retry loops / attempts:

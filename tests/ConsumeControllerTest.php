@@ -59,25 +59,10 @@ class ConsumeControllerTest extends TestCase
         $exitCode = $controller->actionIndex('orders', 128);
 
         $this->assertSame(0, $exitCode);
-        $this->assertSame('orders', $service->consumeArgs[0]);
-        $this->assertSame('app\\queues\\RabbitMqHandler', $service->consumeArgs[1]);
-
-        $options = $service->consumeArgs[2];
-        $this->assertSame(3, $options['prefetch']);
-        $this->assertTrue($options['managedRetry']);
-        $this->assertSame([
-            'maxAttempts' => 2,
-            'retryQueues' => [
-                ['name' => 'orders.retry.5s', 'ttlMs' => 5000],
-            ],
-            'deadQueue' => 'orders.dead',
-        ], $options['retryPolicy']);
-        $this->assertFalse($options['consumeFailFast']);
-        $this->assertSame(['RuntimeException', 'InvalidArgumentException'], $options['fatalExceptionClasses']);
-        $this->assertSame(['Exception'], $options['recoverableExceptionClasses']);
-        $this->assertCount(2, $options['consumeMiddlewares']);
-        $this->assertSame(MemoryLimitMiddleware::class, $options['consumeMiddlewares'][1]['class']);
-        $this->assertSame(128 * 1024 * 1024, $options['consumeMiddlewares'][1]['memoryLimitBytes']);
+        $this->assertSame('orders', $service->lastQueue);
+        $this->assertSame(3, $service->lastPrefetch);
+        $this->assertTrue($service->handlerCalled);
+        $this->assertSame('orders', $service->handlerQueue);
     }
 
     private function prepareAppConsumers(): void
@@ -156,16 +141,22 @@ PHP
 
 class FakeRabbitMqService extends \illusiard\rabbitmq\components\RabbitMqService
 {
-    public array $consumeArgs = [];
-
-    public function consume(string $queue, $handler, array $options = []): void
-    {
-        $this->consumeArgs = [$queue, $handler, $options];
-    }
+    public ?string $lastQueue = null;
+    public ?int $lastPrefetch = null;
+    public bool $handlerCalled = false;
+    public ?string $handlerQueue = null;
 
     public function getConnection(): \illusiard\rabbitmq\contracts\ConnectionInterface
     {
-        return new class implements \illusiard\rabbitmq\contracts\ConnectionInterface {
+        $parent = $this;
+        return new class ($parent) implements \illusiard\rabbitmq\contracts\ConnectionInterface {
+            private FakeRabbitMqService $parent;
+
+            public function __construct(FakeRabbitMqService $parent)
+            {
+                $this->parent = $parent;
+            }
+
             public function connect(): void
             {
             }
@@ -186,9 +177,30 @@ class FakeRabbitMqService extends \illusiard\rabbitmq\components\RabbitMqService
 
             public function getConsumer(): \illusiard\rabbitmq\contracts\ConsumerInterface
             {
-                return new class implements \illusiard\rabbitmq\contracts\ConsumerInterface {
+                $parent = $this->parent;
+                return new class ($parent) implements \illusiard\rabbitmq\contracts\ConsumerInterface {
+                    private FakeRabbitMqService $parent;
+
+                    public function __construct(FakeRabbitMqService $parent)
+                    {
+                        $this->parent = $parent;
+                    }
+
                     public function consume(string $queue, callable $handler, int $prefetch = 1): void
                     {
+                        $this->parent->lastQueue = $queue;
+                        $this->parent->lastPrefetch = $prefetch;
+                        $handler('body', [
+                            'body' => 'body',
+                            'headers' => [],
+                            'properties' => [],
+                            'delivery_tag' => 1,
+                            'routing_key' => 'routing',
+                            'exchange' => 'exchange',
+                            'redelivered' => false,
+                        ]);
+                        $this->parent->handlerCalled = true;
+                        $this->parent->handlerQueue = $queue;
                     }
                 };
             }

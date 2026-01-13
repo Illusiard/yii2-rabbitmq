@@ -23,18 +23,17 @@ class ConsumeRunnerTest extends TestCase
                 parent::__construct();
             }
 
-            public function consume(string $queue, $handler, array $options = []): void
-            {
-                if (!is_file($this->expectedLockFile)) {
-                    throw new \RuntimeException('Lock file missing.');
-                }
-
-                throw new \RuntimeException('Forced failure.');
-            }
-
             public function getConnection(): \illusiard\rabbitmq\contracts\ConnectionInterface
             {
-                return new class implements \illusiard\rabbitmq\contracts\ConnectionInterface {
+                $lockFile = $this->expectedLockFile;
+                return new class ($lockFile) implements \illusiard\rabbitmq\contracts\ConnectionInterface {
+                    private string $lockFile;
+
+                    public function __construct(string $lockFile)
+                    {
+                        $this->lockFile = $lockFile;
+                    }
+
                     public function connect(): void
                     {
                     }
@@ -55,9 +54,22 @@ class ConsumeRunnerTest extends TestCase
 
                     public function getConsumer(): \illusiard\rabbitmq\contracts\ConsumerInterface
                     {
-                        return new class implements \illusiard\rabbitmq\contracts\ConsumerInterface {
+                        $lockFile = $this->lockFile;
+                        return new class ($lockFile) implements \illusiard\rabbitmq\contracts\ConsumerInterface {
+                            private string $lockFile;
+
+                            public function __construct(string $lockFile)
+                            {
+                                $this->lockFile = $lockFile;
+                            }
+
                             public function consume(string $queue, callable $handler, int $prefetch = 1): void
                             {
+                                if (!is_file($this->lockFile)) {
+                                    throw new \RuntimeException('Lock file missing.');
+                                }
+
+                                throw new \RuntimeException('Forced failure.');
                             }
                         };
                     }

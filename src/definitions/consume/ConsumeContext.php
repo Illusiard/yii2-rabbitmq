@@ -4,29 +4,28 @@ namespace illusiard\rabbitmq\definitions\consume;
 
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
-use illusiard\rabbitmq\definitions\publisher\PublisherInterface;
 use illusiard\rabbitmq\message\Envelope;
 
 class ConsumeContext
 {
     private Envelope $envelope;
-    private array $meta;
+    private MessageMeta $meta;
     private RabbitMqService $service;
-    private ?ConsumerInterface $consumer;
-    private ?PublisherInterface $publisher;
+    private ConsumerInterface $consumer;
+    private bool $stopRequested;
 
     public function __construct(
         Envelope $envelope,
-        array $meta,
+        MessageMeta $meta,
         RabbitMqService $service,
-        ?ConsumerInterface $consumer = null,
-        ?PublisherInterface $publisher = null
+        ConsumerInterface $consumer,
+        bool $stopRequested = false
     ) {
         $this->envelope = $envelope;
         $this->meta = $meta;
         $this->service = $service;
         $this->consumer = $consumer;
-        $this->publisher = $publisher;
+        $this->stopRequested = $stopRequested;
     }
 
     public function getEnvelope(): Envelope
@@ -34,9 +33,14 @@ class ConsumeContext
         return $this->envelope;
     }
 
-    public function getMeta(): array
+    public function getMeta(): MessageMeta
     {
         return $this->meta;
+    }
+
+    public function getConsumer(): ConsumerInterface
+    {
+        return $this->consumer;
     }
 
     public function getService(): RabbitMqService
@@ -44,13 +48,8 @@ class ConsumeContext
         return $this->service;
     }
 
-    public function getConsumer(): ?ConsumerInterface
+    public function isStopRequested(): bool
     {
-        return $this->consumer;
-    }
-
-    public function getPublisher(): ?PublisherInterface
-    {
-        return $this->publisher;
+        return $this->stopRequested;
     }
 }

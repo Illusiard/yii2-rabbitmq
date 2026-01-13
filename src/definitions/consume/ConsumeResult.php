@@ -13,10 +13,12 @@ class ConsumeResult
     public const ACTION_STOP = 'stop';
 
     private string $action;
+    private bool $requeue;
 
-    private function __construct(string $action)
+    private function __construct(string $action, bool $requeue = false)
     {
         $this->action = $action;
+        $this->requeue = $requeue;
     }
 
     public static function ack(): self
@@ -29,14 +31,14 @@ class ConsumeResult
         return new self(self::ACTION_RETRY);
     }
 
-    public static function reject(): self
+    public static function reject(bool $requeue = false): self
     {
-        return new self(self::ACTION_REJECT);
+        return new self(self::ACTION_REJECT, $requeue);
     }
 
     public static function requeue(): self
     {
-        return new self(self::ACTION_REQUEUE);
+        return new self(self::ACTION_REQUEUE, true);
     }
 
     public static function stop(): self
@@ -44,7 +46,7 @@ class ConsumeResult
         return new self(self::ACTION_STOP);
     }
 
-    public static function fromBool(bool $value): self
+    public static function fromLegacyBool(bool $value): self
     {
         return $value ? self::ack() : self::retry();
     }
@@ -56,7 +58,7 @@ class ConsumeResult
         }
 
         if (is_bool($result)) {
-            return self::fromBool($result);
+            return self::fromLegacyBool($result);
         }
 
         throw new InvalidArgumentException('Handler result must be ConsumeResult or bool.');
@@ -65,5 +67,10 @@ class ConsumeResult
     public function getAction(): string
     {
         return $this->action;
+    }
+
+    public function shouldRequeue(): bool
+    {
+        return $this->requeue;
     }
 }
