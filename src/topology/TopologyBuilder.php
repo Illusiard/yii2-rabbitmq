@@ -2,7 +2,6 @@
 
 namespace illusiard\rabbitmq\topology;
 
-use Yii;
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\definitions\consumer\ConsumerInterface as DefinitionConsumer;
 use illusiard\rabbitmq\definitions\publisher\PublisherInterface as DefinitionPublisher;
@@ -46,7 +45,7 @@ class TopologyBuilder
 
         if ($consumerRegistry !== null) {
             foreach ($consumerRegistry->all() as $fqcn) {
-                $instance = Yii::createObject($fqcn);
+                $instance = $service->createConsumerDefinition($fqcn);
                 if ($instance instanceof DefinitionConsumer) {
                     $this->applyDefinitionTopology($topology, $instance);
                 }
@@ -55,7 +54,7 @@ class TopologyBuilder
 
         if ($publisherRegistry !== null) {
             foreach ($publisherRegistry->all() as $fqcn) {
-                $instance = Yii::createObject($fqcn);
+                $instance = $service->createPublisherDefinition($fqcn);
                 if ($instance instanceof DefinitionPublisher) {
                     $this->applyDefinitionTopology($topology, $instance);
                 }

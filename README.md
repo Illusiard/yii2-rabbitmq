@@ -110,6 +110,76 @@ $rabbit = Yii::$app->get('rabbitmq');
 $rabbit->forProfile('backup')->publish('Hello', 'exchange', 'route.key');
 ```
 
+## Profile (project defaults)
+
+Profile позволяет задать общие defaults для definitions (consumers/publishers) без копипаста опций.  
+Это отдельная сущность от connection profiles и не обязательна.
+
+Подключение профиля:
+
+```php
+'components' => [
+    'rabbitmq' => [
+        'class' => illusiard\\rabbitmq\\components\\RabbitMqService::class,
+        'profile' => app\\services\\rabbitmq\\RabbitMqProfile::class,
+    ],
+],
+```
+
+Допустимые значения `profile`: `null`, FQCN, callable или объект.  
+Если задан FQCN, используется `Yii::createObject()`.
+
+Пример профиля:
+
+```php
+<?php
+
+namespace app\\services\\rabbitmq;
+
+use illusiard\\rabbitmq\\profile\\OptionsMerger;
+use illusiard\\rabbitmq\\profile\\RabbitMqProfileInterface;
+
+class RabbitMqProfile implements RabbitMqProfileInterface
+{
+    public function getConsumerDefaults(): array
+    {
+        return [
+            'prefetch' => 10,
+            'managedRetry' => true,
+        ];
+    }
+
+    public function getPublisherDefaults(): array
+    {
+        return [
+            'confirm' => true,
+            'properties' => [
+                'delivery_mode' => 2,
+            ],
+        ];
+    }
+
+    public function getMiddlewareDefaults(): array
+    {
+        return [
+            'consumer' => ['trace', 'metrics'],
+            'publisher' => ['trace'],
+        ];
+    }
+
+    public function mergeOptions(array $defaults, array $overrides): array
+    {
+        return OptionsMerger::merge($defaults, $overrides);
+    }
+}
+```
+
+Правила merge:
+- scalars: override
+- associative arrays: recursive merge (overrides win)
+- lists (numeric arrays): concat с уникальностью, defaults -> overrides
+- если overrides содержит key => null, то дефолтный ключ удаляется
+
 ## Consumer
 
 Consumer class:

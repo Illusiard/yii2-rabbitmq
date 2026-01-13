@@ -33,6 +33,12 @@ use illusiard\rabbitmq\definitions\registry\ConsumerRegistry as DefinitionConsum
 use illusiard\rabbitmq\definitions\registry\PublisherRegistry as DefinitionPublisherRegistry;
 use illusiard\rabbitmq\definitions\registry\MiddlewareRegistry as DefinitionMiddlewareRegistry;
 use illusiard\rabbitmq\definitions\registry\HandlerRegistry as DefinitionHandlerRegistry;
+use illusiard\rabbitmq\definitions\consumer\ConsumerInterface as DefinitionConsumerInterface;
+use illusiard\rabbitmq\definitions\publisher\PublisherInterface as DefinitionPublisherInterface;
+use illusiard\rabbitmq\profile\OptionsMerger;
+use illusiard\rabbitmq\profile\ProfiledConsumer;
+use illusiard\rabbitmq\profile\ProfiledPublisher;
+use illusiard\rabbitmq\profile\RabbitMqProfileInterface;
 use InvalidArgumentException;
 use illusiard\rabbitmq\topology\Topology;
 use illusiard\rabbitmq\topology\TopologyBuilder;
@@ -70,6 +76,7 @@ class RabbitMqService extends Component
     public bool    $returnSinkEnabled           = true;
     public ?string $componentId                 = null;
     public array   $discovery                   = [];
+    public         $profile                     = null;
 
     /** @var callable|null */
     public $connectionFactory;
@@ -87,6 +94,7 @@ class RabbitMqService extends Component
     private ?DefinitionPublisherRegistry $publisherRegistry = null;
     private ?DefinitionMiddlewareRegistry $middlewareRegistry = null;
     private ?DefinitionHandlerRegistry $handlerRegistry = null;
+    private ?RabbitMqProfileInterface $profileInstance = null;
 
     public function init()
     {
@@ -349,6 +357,54 @@ class RabbitMqService extends Component
         return $this->handlerRegistry;
     }
 
+    public function createConsumerDefinition(string $fqcn): DefinitionConsumerInterface
+    {
+        $instance = Yii::createObject($fqcn);
+        if (!$instance instanceof DefinitionConsumerInterface) {
+            throw new InvalidArgumentException("Consumer class '{$fqcn}' must implement definitions ConsumerInterface.");
+        }
+
+        return $this->applyProfileToConsumer($instance);
+    }
+
+    public function createPublisherDefinition(string $fqcn): DefinitionPublisherInterface
+    {
+        $instance = Yii::createObject($fqcn);
+        if (!$instance instanceof DefinitionPublisherInterface) {
+            throw new InvalidArgumentException("Publisher class '{$fqcn}' must implement definitions PublisherInterface.");
+        }
+
+        return $this->applyProfileToPublisher($instance);
+    }
+
+    public function getProfile(): ?RabbitMqProfileInterface
+    {
+        if ($this->profileInstance !== null) {
+            return $this->profileInstance;
+        }
+
+        if ($this->profile === null) {
+            return null;
+        }
+
+        $profile = $this->profile;
+        if (is_string($profile)) {
+            $profile = Yii::createObject($profile);
+        } elseif (is_callable($profile)) {
+            $profile = $this->invokeProfileFactory($profile);
+        } elseif (!is_object($profile)) {
+            throw new InvalidArgumentException('profile must be null, a FQCN, a callable, or an object.');
+        }
+
+        if (!$profile instanceof RabbitMqProfileInterface) {
+            throw new InvalidArgumentException('profile must implement RabbitMqProfileInterface.');
+        }
+
+        $this->profileInstance = $profile;
+
+        return $this->profileInstance;
+    }
+
     private function normalizeConsumeOptions(array $options): array
     {
         $prefetch = $options['prefetch'] ?? 1;
@@ -413,6 +469,119 @@ class RabbitMqService extends Component
         }
 
         return null;
+    }
+
+    private function applyProfileToConsumer(DefinitionConsumerInterface $consumer): DefinitionConsumerInterface
+    {
+        $profile = $this->getProfile();
+        if ($profile === null) {
+            return $consumer;
+        }
+
+        $options = $consumer->getOptions();
+        $middlewares = $consumer->getMiddlewares();
+
+        $mergedOptions = $this->mergeProfileOptions($profile, $profile->getConsumerDefaults(), $options);
+        $mergedMiddlewares = $this->mergeProfileOptions(
+            $profile,
+            $this->getProfileConsumerMiddlewareDefaults($profile),
+            $middlewares
+        );
+
+        if ($options === $mergedOptions && $middlewares === $mergedMiddlewares) {
+            return $consumer;
+        }
+
+        return new ProfiledConsumer($consumer, $mergedOptions, $mergedMiddlewares);
+    }
+
+    private function applyProfileToPublisher(DefinitionPublisherInterface $publisher): DefinitionPublisherInterface
+    {
+        $profile = $this->getProfile();
+        if ($profile === null) {
+            return $publisher;
+        }
+
+        $options = $publisher->getOptions();
+        $middlewares = $publisher->getMiddlewares();
+
+        $mergedOptions = $this->mergeProfileOptions($profile, $profile->getPublisherDefaults(), $options);
+        $mergedMiddlewares = $this->mergeProfileOptions(
+            $profile,
+            $this->getProfilePublisherMiddlewareDefaults($profile),
+            $middlewares
+        );
+
+        if ($options === $mergedOptions && $middlewares === $mergedMiddlewares) {
+            return $publisher;
+        }
+
+        return new ProfiledPublisher($publisher, $mergedOptions, $mergedMiddlewares);
+    }
+
+    private function mergeProfileOptions(
+        RabbitMqProfileInterface $profile,
+        array $defaults,
+        array $overrides
+    ): array {
+        if (method_exists($profile, 'mergeOptions')) {
+            return $profile->mergeOptions($defaults, $overrides);
+        }
+
+        return OptionsMerger::merge($defaults, $overrides);
+    }
+
+    private function getProfileConsumerMiddlewareDefaults(RabbitMqProfileInterface $profile): array
+    {
+        $defaults = $this->getProfileMiddlewareDefaults($profile);
+
+        if (isset($defaults['consumer']) && is_array($defaults['consumer'])) {
+            return $defaults['consumer'];
+        }
+
+        if (isset($defaults['consume']) && is_array($defaults['consume'])) {
+            return $defaults['consume'];
+        }
+
+        return [];
+    }
+
+    private function getProfilePublisherMiddlewareDefaults(RabbitMqProfileInterface $profile): array
+    {
+        $defaults = $this->getProfileMiddlewareDefaults($profile);
+
+        if (isset($defaults['publisher']) && is_array($defaults['publisher'])) {
+            return $defaults['publisher'];
+        }
+
+        if (isset($defaults['publish']) && is_array($defaults['publish'])) {
+            return $defaults['publish'];
+        }
+
+        return [];
+    }
+
+    private function getProfileMiddlewareDefaults(RabbitMqProfileInterface $profile): array
+    {
+        if (!method_exists($profile, 'getMiddlewareDefaults')) {
+            return [];
+        }
+
+        $defaults = $profile->getMiddlewareDefaults();
+
+        return is_array($defaults) ? $defaults : [];
+    }
+
+    private function invokeProfileFactory(callable $factory): object
+    {
+        $closure = \Closure::fromCallable($factory);
+        $reflection = new \ReflectionFunction($closure);
+
+        if ($reflection->getNumberOfParameters() > 0) {
+            return $closure($this);
+        }
+
+        return $closure();
     }
 
     public function tick(float $timeout = 0.0): void
@@ -777,6 +946,7 @@ class RabbitMqService extends Component
         $this->publisherRegistry  = null;
         $this->middlewareRegistry = null;
         $this->handlerRegistry    = null;
+        $this->profileInstance    = null;
     }
 
     private function getDiscoveryConfigOrThrow(): DiscoveryConfig

@@ -6,7 +6,6 @@ use Closure;
 use illusiard\rabbitmq\components\RabbitMqService;
 use Yii;
 use yii\console\Controller;
-use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
 use illusiard\rabbitmq\exceptions\FatalException;
 use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
 use illusiard\rabbitmq\orchestration\RunnerOptions;
@@ -65,12 +64,7 @@ class ConsumeController extends Controller
                 return 1;
             }
 
-            $consumerInstance = Yii::createObject($consumerClass);
-            if (!$consumerInstance instanceof ConsumerInterface) {
-                $this->stderr("Consumer class '{$consumerClass}' must implement definitions ConsumerInterface.\n");
-
-                return 1;
-            }
+            $consumerInstance = $rabbit->createConsumerDefinition($consumerClass);
 
             $optionsRaw = $consumerInstance->getOptions();
             if (!is_array($optionsRaw)) {
