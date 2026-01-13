@@ -279,17 +279,16 @@ CLI:
 
 ## Confirm/mandatory
 
-- `confirm` включает publisher confirms: публикация ждёт ack/nack, при nack или таймауте будет `PublishException`.
-- `mandatory` включает mandatory publish: unroutable сообщение вернётся через `basic.return`, будет `PublishException`.
-- `publishTimeout` задаёт таймаут ожидания подтверждения/возврата.
-- `message_id` используется для корреляции `basic.return` с конкретной публикацией; если вернуть сообщение невозможно сопоставить, будет ошибка `PUBLISH_UNROUTABLE_UNCORRELATED`.
+- `confirm=true` включает publisher confirms: публикация ждёт ack/nack, при nack или таймауте будет `PublishException`.
+- `mandatory=true` включает mandatory publish: unroutable сообщения фиксируются через ReturnSink, без блокирующего ожидания.
+- `mandatoryStrict=true` (по умолчанию) делает unroutable ошибкой при `confirm=true` — будет `PublishException(PUBLISH_UNROUTABLE)`.
+- `publishTimeout` задаёт таймаут ожидания подтверждения при `confirm=true`.
 
-Включайте эти опции, когда важна надёжная доставка и нужно явно получать ошибки доставки.
+Возвраты обрабатываются через ReturnSink и доступны через `tick()` + `drainReturns()`. Это best‑effort для mandatory‑only: ошибки доставки нужно опрашивать.
 
-## Async return handler (mandatory-only)
+## ReturnSink и tick/poll
 
-При `mandatory=true` и `confirm=false` `basic.return` обрабатывается асинхронно.  
-Чтобы обработчик получал события, вызовите `tick()` в цикле либо используйте внешний event loop.
+При `mandatory=true` callbacks `basic.return` снимаются при вызове `tick()` и попадают в ReturnSink.
 
 Конфигурация:
 
@@ -298,8 +297,8 @@ CLI:
     'rabbitmq' => [
         'class' => illusiard\rabbitmq\components\RabbitMqService::class,
         'mandatory' => true,
-        'returnHandler' => illusiard\rabbitmq\amqp\LoggingReturnHandler::class,
-        'returnHandlerEnabled' => true,
+        'returnSink' => illusiard\rabbitmq\amqp\InMemoryReturnSink::class,
+        'returnSinkEnabled' => true,
     ],
 ],
 ```
@@ -310,8 +309,9 @@ CLI:
 $rabbit = Yii::$app->get('rabbitmq');
 $rabbit->publish('payload', 'exchange', 'rk');
 
-// Дать возможность обработать basic.return (если есть).
+// Снять события возвратов и ACK/NACK (если включён confirm).
 $rabbit->tick(0.1);
+$returns = $rabbit->drainReturns();
 ```
 
 ## Managed retry

@@ -10,6 +10,7 @@ use Yii;
 use illusiard\rabbitmq\contracts\PublisherInterface;
 use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
 use illusiard\rabbitmq\amqp\ReturnedMessage;
+use illusiard\rabbitmq\amqp\ReturnSinkInterface;
 use illusiard\rabbitmq\exceptions\PublishException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
 
@@ -19,21 +20,26 @@ class AmqpPublisher implements PublisherInterface
     private ?AMQPChannel $channel = null;
     private bool $confirm;
     private bool $mandatory;
+    private bool $mandatoryStrict;
     private int $publishTimeout;
     private PublishConfirmTracker $tracker;
-    private ?array $uncorrelatedReturn = null;
     private bool $returnHandlerEnabled;
     private ?ReturnHandlerInterface $returnHandler;
+    private bool $returnSinkEnabled;
+    private ?ReturnSinkInterface $returnSink;
 
     public function __construct(AmqpConnection $connection, array $config = [])
     {
         $this->connection = $connection;
         $this->confirm = (bool)($config['confirm'] ?? false);
         $this->mandatory = (bool)($config['mandatory'] ?? false);
+        $this->mandatoryStrict = (bool)($config['mandatoryStrict'] ?? true);
         $this->publishTimeout = (int)($config['publishTimeout'] ?? 5);
         $this->tracker = new PublishConfirmTracker();
         $this->returnHandlerEnabled = (bool)($config['returnHandlerEnabled'] ?? true);
         $this->returnHandler = $this->resolveReturnHandler($config['returnHandler'] ?? null);
+        $this->returnSinkEnabled = (bool)($config['returnSinkEnabled'] ?? true);
+        $this->returnSink = $this->resolveReturnSink($config['returnSink'] ?? null);
     }
 
     public function publish(
@@ -59,7 +65,7 @@ class AmqpPublisher implements PublisherInterface
         $seqNo = null;
         if ($this->confirm) {
             $seqNo = $this->resolvePublishSeqNo($channel);
-            $this->tracker->register($seqNo, $messageId, microtime(true));
+            $this->tracker->register($seqNo, $messageId, microtime(true), $correlationId, $exchange, $routingKey);
         }
 
         try {
@@ -101,7 +107,6 @@ class AmqpPublisher implements PublisherInterface
             Yii::warning('Publish channel was reset with inflight messages; clearing pending confirms.', 'rabbitmq');
             $this->tracker->clear();
         }
-        $this->uncorrelatedReturn = null;
 
         $this->channel = $this->connection->getAmqpConnection()->channel();
 
@@ -130,6 +135,7 @@ class AmqpPublisher implements PublisherInterface
 
         if ($arg instanceof AMQPMessage) {
             $messageId = null;
+            $correlationId = null;
 
             try {
                 $messageId = $arg->get('message_id');
@@ -139,6 +145,19 @@ class AmqpPublisher implements PublisherInterface
 
             if ($messageId) {
                 $seqNo = $this->tracker->findSeqNoByMessageId((string)$messageId);
+                if ($seqNo !== null) {
+                    return $seqNo;
+                }
+            }
+
+            try {
+                $correlationId = $arg->get('correlation_id');
+            } catch (\Throwable $e) {
+                // ignore
+            }
+
+            if ($correlationId) {
+                $seqNo = $this->tracker->findSeqNoByCorrelationId((string)$correlationId);
                 if ($seqNo !== null) {
                     return $seqNo;
                 }
@@ -157,10 +176,16 @@ class AmqpPublisher implements PublisherInterface
             $channel->set_ack_handler(function ($arg, $multiple = false) {
                 $seqNo = $this->normalizeConfirmTag($arg);
                 $this->tracker->markAck($seqNo, (bool)$multiple);
+                if ($this->returnSink !== null && $this->returnSinkEnabled) {
+                    $this->returnSink->onAck($seqNo, (bool)$multiple);
+                }
             });
             $channel->set_nack_handler(function ($arg, $multiple = false) {
                 $seqNo = $this->normalizeConfirmTag($arg);
                 $this->tracker->markNack($seqNo, (bool)$multiple);
+                if ($this->returnSink !== null && $this->returnSinkEnabled) {
+                    $this->returnSink->onNack($seqNo, (bool)$multiple);
+                }
             });
         }
 
@@ -173,36 +198,38 @@ class AmqpPublisher implements PublisherInterface
                 $message
             ) {
                 $returnInfo = [
-                    'reply_code' => $replyCode,
-                    'reply_text' => $replyText,
-                    'exchange' => $exchange,
-                    'routing_key' => $routingKey,
+                    'reply_code' => (int)$replyCode,
+                    'reply_text' => (string)$replyText,
+                    'exchange' => (string)$exchange,
+                    'routing_key' => (string)$routingKey,
                 ];
 
-                $this->dispatchReturn(
-                    $replyCode,
-                    $replyText,
-                    $exchange,
-                    $routingKey,
+                $event = $this->dispatchReturn(
+                    (int)$replyCode,
+                    (string)$replyText,
+                    (string)$exchange,
+                    (string)$routingKey,
                     $message
                 );
 
+                if ($this->returnSink !== null && $this->returnSinkEnabled && $event !== null) {
+                    $this->returnSink->onReturned($event);
+                }
+
                 if ($this->confirm) {
                     $messageId = $this->resolveMessageId($message);
-                    if ($messageId === null || $messageId === '') {
-                        $this->uncorrelatedReturn = $returnInfo;
-                        Yii::warning(
-                            ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED . ' Message returned without message_id.',
-                            'rabbitmq'
-                        );
-                        return;
+                    $correlationId = $this->resolveCorrelationId($message);
+                    $seqNo = null;
+
+                    if ($messageId !== null && $messageId !== '') {
+                        $seqNo = $this->tracker->markReturned($messageId, $returnInfo);
+                    } elseif ($correlationId !== null && $correlationId !== '') {
+                        $seqNo = $this->tracker->markReturnedByCorrelationId($correlationId, $returnInfo);
                     }
 
-                    $seqNo = $this->tracker->markReturned($messageId, $returnInfo);
                     if ($seqNo === null) {
-                        $this->uncorrelatedReturn = $returnInfo;
                         Yii::warning(
-                            ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED . ' Message returned but not found in inflight map.',
+                            ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED . ' Message returned but could not be correlated.',
                             'rabbitmq'
                         );
                     }
@@ -238,7 +265,7 @@ class AmqpPublisher implements PublisherInterface
             }
 
             $state = $this->tracker->get($seqNo);
-            $this->throwIfReturned($state, $messageId, $correlationId, $exchange, $routingKey);
+            $this->throwIfReturned($state, $messageId, $correlationId, $exchange, $routingKey, $this->mandatoryStrict);
             if ($this->confirm && $state !== null && $state['nacked']) {
                 $this->logPublishError(
                     ErrorCode::PUBLISH_NACK,
@@ -276,24 +303,17 @@ class AmqpPublisher implements PublisherInterface
         string $messageId,
         ?string $correlationId,
         string $exchange,
-        string $routingKey
+        string $routingKey,
+        bool $strict
     ): void {
-        if ($this->uncorrelatedReturn !== null) {
-            $this->uncorrelatedReturn = null;
-            $this->logPublishError(
-                ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED,
-                'Publish failed: unroutable return could not be correlated.',
-                $messageId,
-                $correlationId,
-                $exchange,
-                $routingKey
-            );
-            throw new PublishException(
-                'Message was returned by broker but could not be correlated.',
-                ErrorCode::PUBLISH_UNROUTABLE_UNCORRELATED
-            );
-        }
         if ($state !== null && $state['returned']) {
+            if (!$strict) {
+                Yii::warning(
+                    ErrorCode::PUBLISH_UNROUTABLE . ' Publish returned but strict mode disabled.',
+                    'rabbitmq'
+                );
+                return;
+            }
             $this->logPublishError(
                 ErrorCode::PUBLISH_UNROUTABLE,
                 'Publish failed: message was returned by broker.',
@@ -329,6 +349,27 @@ class AmqpPublisher implements PublisherInterface
                 $properties = $message->get_properties();
                 if (is_array($properties) && isset($properties['message_id']) && is_string($properties['message_id'])) {
                     return $properties['message_id'];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function resolveCorrelationId($message): ?string
+    {
+        if (is_object($message)) {
+            if (method_exists($message, 'get')) {
+                $value = $message->get('correlation_id');
+                if (is_string($value) && $value !== '') {
+                    return $value;
+                }
+            }
+
+            if (method_exists($message, 'get_properties')) {
+                $properties = $message->get_properties();
+                if (is_array($properties) && isset($properties['correlation_id']) && is_string($properties['correlation_id'])) {
+                    return $properties['correlation_id'];
                 }
             }
         }
@@ -399,15 +440,44 @@ class AmqpPublisher implements PublisherInterface
         return $instance;
     }
 
+    private function resolveReturnSink($sink): ?ReturnSinkInterface
+    {
+        if (!$this->returnSinkEnabled || $sink === null) {
+            return null;
+        }
+
+        if ($sink instanceof ReturnSinkInterface) {
+            return $sink;
+        }
+
+        $instance = Yii::createObject($sink);
+        if (!$instance instanceof ReturnSinkInterface) {
+            throw new \InvalidArgumentException('returnSink must implement ReturnSinkInterface.');
+        }
+
+        return $instance;
+    }
+
+    public function drainReturns(): array
+    {
+        if ($this->returnSink !== null && method_exists($this->returnSink, 'drainReturns')) {
+            return $this->returnSink->drainReturns();
+        }
+
+        return [];
+    }
+
     private function dispatchReturn(
         int $replyCode,
         string $replyText,
         string $exchange,
         string $routingKey,
         $message
-    ): void {
+    ): ?ReturnedMessage {
         if (!$this->returnHandlerEnabled || $this->returnHandler === null) {
-            return;
+            $handler = null;
+        } else {
+            $handler = $this->returnHandler;
         }
 
         $properties = [];
@@ -449,6 +519,10 @@ class AmqpPublisher implements PublisherInterface
             microtime(true)
         );
 
-        $this->returnHandler->handle($event);
+        if ($handler !== null) {
+            $handler->handle($event);
+        }
+
+        return $event;
     }
 }

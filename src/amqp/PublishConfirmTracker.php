@@ -6,6 +6,7 @@ class PublishConfirmTracker
 {
     private array $inflight = [];
     private array $messageIdToSeq = [];
+    private array $correlationIdToSeq = [];
     private int $localSeqNo = 0;
 
     public function nextLocalSeqNo(): int
@@ -14,7 +15,14 @@ class PublishConfirmTracker
         return $this->localSeqNo;
     }
 
-    public function register(int $seqNo, ?string $messageId, float $timestampStart): void
+    public function register(
+        int $seqNo,
+        ?string $messageId,
+        float $timestampStart,
+        ?string $correlationId = null,
+        ?string $exchange = null,
+        ?string $routingKey = null
+    ): void
     {
         $this->inflight[$seqNo] = [
             'acked' => false,
@@ -23,10 +31,17 @@ class PublishConfirmTracker
             'returnInfo' => null,
             'timestampStart' => $timestampStart,
             'messageId' => $messageId,
+            'correlationId' => $correlationId,
+            'exchange' => $exchange,
+            'routingKey' => $routingKey,
         ];
 
         if ($messageId !== null && $messageId !== '') {
             $this->messageIdToSeq[$messageId] = $seqNo;
+        }
+
+        if ($correlationId !== null && $correlationId !== '' && !isset($this->correlationIdToSeq[$correlationId])) {
+            $this->correlationIdToSeq[$correlationId] = $seqNo;
         }
     }
 
@@ -63,6 +78,23 @@ class PublishConfirmTracker
         return $seqNo;
     }
 
+    public function markReturnedByCorrelationId(string $correlationId, array $returnInfo): ?int
+    {
+        if (!isset($this->correlationIdToSeq[$correlationId])) {
+            return null;
+        }
+
+        $seqNo = $this->correlationIdToSeq[$correlationId];
+        if (!isset($this->inflight[$seqNo])) {
+            return null;
+        }
+
+        $this->inflight[$seqNo]['returned'] = true;
+        $this->inflight[$seqNo]['returnInfo'] = $returnInfo;
+
+        return $seqNo;
+    }
+
     public function get(int $seqNo): ?array
     {
         return $this->inflight[$seqNo] ?? null;
@@ -79,6 +111,11 @@ class PublishConfirmTracker
             unset($this->messageIdToSeq[$messageId]);
         }
 
+        $correlationId = $this->inflight[$seqNo]['correlationId'] ?? null;
+        if (is_string($correlationId) && $correlationId !== '') {
+            unset($this->correlationIdToSeq[$correlationId]);
+        }
+
         unset($this->inflight[$seqNo]);
     }
 
@@ -86,6 +123,7 @@ class PublishConfirmTracker
     {
         $this->inflight = [];
         $this->messageIdToSeq = [];
+        $this->correlationIdToSeq = [];
     }
 
     public function count(): int
@@ -109,8 +147,13 @@ class PublishConfirmTracker
         }
     }
 
-    public function findSeqNoByMessageId(string $messageId): ?string
+    public function findSeqNoByMessageId(string $messageId): ?int
     {
         return $this->messageIdToSeq[$messageId] ?? null;
+    }
+
+    public function findSeqNoByCorrelationId(string $correlationId): ?int
+    {
+        return $this->correlationIdToSeq[$correlationId] ?? null;
     }
 }

@@ -47,6 +47,7 @@ class ConfigValidator
         $this->validateMiddlewares($config, 'consumeMiddlewares');
         $this->validateConsumeOptions($config);
         $this->validateReturnHandler($config);
+        $this->validateReturnSink($config);
     }
 
     public function validateTopology(array $config): void
@@ -146,6 +147,7 @@ class ConfigValidator
         $this->validateIntOption($config, 'publishTimeout', $path . '.publishTimeout', ErrorCode::CONFIG_INVALID, 1);
         $this->validateBooleanOption($config, 'confirm', $path . '.confirm', ErrorCode::CONFIG_INVALID);
         $this->validateBooleanOption($config, 'mandatory', $path . '.mandatory', ErrorCode::CONFIG_INVALID);
+        $this->validateBooleanOption($config, 'mandatoryStrict', $path . '.mandatoryStrict', ErrorCode::CONFIG_INVALID);
     }
 
     private function validateMiddlewares(array $config, string $key): void
@@ -184,6 +186,23 @@ class ConfigValidator
 
         if (!is_string($config['returnHandler']) && !is_array($config['returnHandler']) && !is_object($config['returnHandler'])) {
             throw new RabbitMqException('returnHandler must be string, array, object, or null.', ErrorCode::CONFIG_INVALID);
+        }
+    }
+
+    private function validateReturnSink(array $config): void
+    {
+        $this->validateBooleanOption($config, 'returnSinkEnabled', 'returnSinkEnabled', ErrorCode::CONFIG_INVALID);
+
+        if (!isset($config['returnSink'])) {
+            return;
+        }
+
+        if ($config['returnSink'] === null) {
+            return;
+        }
+
+        if (!is_string($config['returnSink']) && !is_array($config['returnSink']) && !is_object($config['returnSink'])) {
+            throw new RabbitMqException('returnSink must be string, array, object, or null.', ErrorCode::CONFIG_INVALID);
         }
     }
 

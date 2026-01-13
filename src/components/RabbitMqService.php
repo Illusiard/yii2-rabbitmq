@@ -24,6 +24,8 @@ use illusiard\rabbitmq\middleware\PublishMiddlewareInterface;
 use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
 use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
 use illusiard\rabbitmq\amqp\LoggingReturnHandler;
+use illusiard\rabbitmq\amqp\InMemoryReturnSink;
+use illusiard\rabbitmq\amqp\ReturnSinkInterface;
 use illusiard\rabbitmq\orchestration\ConsumeRunner;
 use illusiard\rabbitmq\definitions\discovery\DiscoveryConfig;
 use illusiard\rabbitmq\definitions\discovery\DefinitionsDiscovery;
@@ -50,6 +52,7 @@ class RabbitMqService extends Component
     public array   $topology                    = [];
     public bool    $confirm                     = false;
     public bool    $mandatory                   = false;
+    public bool    $mandatoryStrict             = true;
     public int     $publishTimeout              = 5;
     public bool    $managedRetry                = false;
     public array   $retryPolicy                 = [];
@@ -63,6 +66,8 @@ class RabbitMqService extends Component
     public array   $recoverableExceptionClasses = [];
     public         $returnHandler               = LoggingReturnHandler::class;
     public bool    $returnHandlerEnabled        = true;
+    public         $returnSink                  = InMemoryReturnSink::class;
+    public bool    $returnSinkEnabled           = true;
     public ?string $componentId                 = null;
     public array   $discovery                   = [];
 
@@ -75,6 +80,7 @@ class RabbitMqService extends Component
     private ?PublishPipeline            $publishPipeline    = null;
     private ?ConsumePipeline            $consumePipeline    = null;
     private ?ReturnHandlerInterface     $returnHandlerInstance = null;
+    private ?ReturnSinkInterface        $returnSinkInstance = null;
     private ?string                     $activeProfile      = null;
     private ?string                     $lastError          = null;
     private ?DefinitionConsumerRegistry $consumerRegistry   = null;
@@ -100,6 +106,7 @@ class RabbitMqService extends Component
                     'connectionTimeout' => $this->connectionTimeout,
                     'confirm'           => $this->confirm,
                     'mandatory'         => $this->mandatory,
+                    'mandatoryStrict'   => $this->mandatoryStrict,
                     'publishTimeout'    => $this->publishTimeout,
                 ],
                 'topology'                    => $this->topology,
@@ -110,6 +117,8 @@ class RabbitMqService extends Component
                 'recoverableExceptionClasses' => $this->recoverableExceptionClasses,
                 'returnHandler'               => $this->returnHandler,
                 'returnHandlerEnabled'        => $this->returnHandlerEnabled,
+                'returnSink'                  => $this->returnSink,
+                'returnSinkEnabled'           => $this->returnSinkEnabled,
             ];
 
             if (!empty($this->profiles)) {
@@ -418,6 +427,21 @@ class RabbitMqService extends Component
         }
     }
 
+    public function drainReturns(): array
+    {
+        $publisher = $this->getPublisher();
+        if (method_exists($publisher, 'drainReturns')) {
+            return $publisher->drainReturns();
+        }
+
+        $sink = $this->getReturnSink();
+        if ($sink !== null && method_exists($sink, 'drainReturns')) {
+            return $sink->drainReturns();
+        }
+
+        return [];
+    }
+
     public function setupTopology(array $config): void
     {
         $topology = (new TopologyBuilder())->buildFromConfig($config);
@@ -587,6 +611,34 @@ class RabbitMqService extends Component
         return $this->returnHandlerInstance;
     }
 
+    public function getReturnSink(): ?ReturnSinkInterface
+    {
+        if (!$this->returnSinkEnabled) {
+            return null;
+        }
+
+        if ($this->returnSinkInstance !== null) {
+            return $this->returnSinkInstance;
+        }
+
+        if ($this->returnSink instanceof ReturnSinkInterface) {
+            $this->returnSinkInstance = $this->returnSink;
+            return $this->returnSinkInstance;
+        }
+
+        if ($this->returnSink === null) {
+            return null;
+        }
+
+        $instance = Yii::createObject($this->returnSink);
+        if (!$instance instanceof ReturnSinkInterface) {
+            throw new InvalidArgumentException('returnSink must implement ReturnSinkInterface.');
+        }
+
+        $this->returnSinkInstance = $instance;
+        return $this->returnSinkInstance;
+    }
+
     private function getPublishPipeline(): PublishPipeline
     {
         if ($this->publishPipeline !== null) {
@@ -676,9 +728,12 @@ class RabbitMqService extends Component
             'ssl'               => $this->ssl,
             'confirm'           => $this->confirm,
             'mandatory'         => $this->mandatory,
+            'mandatoryStrict'   => $this->mandatoryStrict,
             'publishTimeout'    => $this->publishTimeout,
             'returnHandler'     => $this->getReturnHandler(),
             'returnHandlerEnabled' => $this->returnHandlerEnabled,
+            'returnSink'        => $this->getReturnSink(),
+            'returnSinkEnabled' => $this->returnSinkEnabled,
         ];
 
         if (empty($this->profiles)) {
@@ -716,6 +771,7 @@ class RabbitMqService extends Component
         $this->publishPipeline    = null;
         $this->consumePipeline    = null;
         $this->returnHandlerInstance = null;
+        $this->returnSinkInstance = null;
         $this->lastError          = null;
         $this->consumerRegistry   = null;
         $this->publisherRegistry  = null;

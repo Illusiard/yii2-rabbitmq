@@ -5,7 +5,7 @@ namespace illusiard\rabbitmq\tests\integration;
 use illusiard\rabbitmq\amqp\AmqpPublisher;
 use illusiard\rabbitmq\amqp\PublishConfirmTracker;
 use illusiard\rabbitmq\amqp\ReturnedMessage;
-use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
+use illusiard\rabbitmq\amqp\InMemoryReturnSink;
 use illusiard\rabbitmq\exceptions\PublishException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
 
@@ -78,7 +78,6 @@ class ConfirmIntegrationTest extends IntegrationTestCase
 
     public function testAMQP_MANDATORY_01_unroutable(): void
     {
-        TestMandatoryReturnHandler::reset();
         $exchange = $this->uniqueName('mandatory_ex');
         $routingKey = 'missing';
 
@@ -86,8 +85,8 @@ class ConfirmIntegrationTest extends IntegrationTestCase
 
         $service = $this->createService([
             'mandatory' => true,
-            'returnHandler' => TestMandatoryReturnHandler::class,
-            'returnHandlerEnabled' => true,
+            'returnSink' => new InMemoryReturnSink(10),
+            'returnSinkEnabled' => true,
         ]);
         $this->setService($service);
 
@@ -97,12 +96,16 @@ class ConfirmIntegrationTest extends IntegrationTestCase
         $publisher->publish('body', $exchange, $routingKey, ['message_id' => $messageId]);
 
         $deadline = microtime(true) + 2.0;
-        while (microtime(true) < $deadline && TestMandatoryReturnHandler::$lastEvent === null) {
+        $event = null;
+        while (microtime(true) < $deadline && $event === null) {
             $service->tick(0.05);
             usleep(50000);
+            $returns = $service->drainReturns();
+            if (!empty($returns)) {
+                $event = $returns[0];
+            }
         }
 
-        $event = TestMandatoryReturnHandler::$lastEvent;
         $this->assertNotNull(
             $event,
             'Expected unroutable return event, but none received. message_id=' . $messageId
@@ -118,6 +121,35 @@ class ConfirmIntegrationTest extends IntegrationTestCase
             $event->replyCode === 312 || stripos($event->replyText, 'unroutable') !== false,
             'Expected unroutable return. ' . $this->formatReturnEvent($event)
         );
+    }
+
+    public function testAMQP_CONFIRM_MANDATORY_01_strictUnroutableThrows(): void
+    {
+        $exchange = $this->uniqueName('confirm_mandatory_ex');
+        $routingKey = 'missing';
+
+        $this->declareExchange($exchange);
+
+        $service = $this->createService([
+            'confirm' => true,
+            'mandatory' => true,
+            'mandatoryStrict' => true,
+            'publishTimeout' => 2,
+            'returnSink' => new InMemoryReturnSink(10),
+            'returnSinkEnabled' => true,
+        ]);
+        $this->setService($service);
+
+        try {
+            $service->publish('body', $exchange, $routingKey);
+            $this->fail('Expected unroutable publish exception.');
+        } catch (PublishException $e) {
+            $this->assertSame(ErrorCode::PUBLISH_UNROUTABLE, $e->getErrorCode());
+        }
+
+        $service->tick(0.05);
+        $returns = $service->drainReturns();
+        $this->assertNotEmpty($returns);
     }
 
     public function testAMQP_TIMEOUT_01_publishTimeout(): void
@@ -177,9 +209,16 @@ class TestConfirmTracker extends PublishConfirmTracker
     public bool $ackMultipleSeen = false;
     public bool $nackMultipleSeen = false;
 
-    public function register(int $seqNo, ?string $messageId, float $timestampStart): void
+    public function register(
+        int $seqNo,
+        ?string $messageId,
+        float $timestampStart,
+        ?string $correlationId = null,
+        ?string $exchange = null,
+        ?string $routingKey = null
+    ): void
     {
-        parent::register($seqNo, $messageId, $timestampStart);
+        parent::register($seqNo, $messageId, $timestampStart, $correlationId, $exchange, $routingKey);
         if ($messageId) {
             $this->registeredMessageIds[$messageId] = true;
         }
@@ -201,20 +240,5 @@ class TestConfirmTracker extends PublishConfirmTracker
         if ($multiple) {
             $this->nackMultipleSeen = true;
         }
-    }
-}
-
-class TestMandatoryReturnHandler implements ReturnHandlerInterface
-{
-    public static ?ReturnedMessage $lastEvent = null;
-
-    public function handle(ReturnedMessage $event): void
-    {
-        self::$lastEvent = $event;
-    }
-
-    public static function reset(): void
-    {
-        self::$lastEvent = null;
     }
 }
