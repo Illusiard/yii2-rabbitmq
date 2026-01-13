@@ -11,14 +11,12 @@ if (!$queue) {
     exit(1);
 }
 
-$readyFile = getenv('RPC_READY_FILE');
+$readyFile = getenv('READY_LOCK');
 
 $server = new RpcServer(Yii::$app->rabbitmq);
-$server->setOnStart(function () use ($readyFile) {
-    if ($readyFile) {
-        @file_put_contents($readyFile, "READY\n", LOCK_EX);
-    }
-});
+if ($readyFile) {
+    $server->setReadyLockFile($readyFile);
+}
 $server->serve($queue, function (Envelope $req) {
     return new Envelope(['ok' => true], [], [], 'rpc.pong', $req->getCorrelationId());
 });

@@ -10,10 +10,12 @@ use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\exceptions\RabbitMqException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
+use illusiard\rabbitmq\helpers\FileHelper;
 
 class RpcServer
 {
     private ?Closure $onStart = null;
+    private ?string $readyLockFile = null;
 
     private RabbitMqService $service;
 
@@ -89,6 +91,10 @@ class RpcServer
             }
         );
 
+        if ($this->readyLockFile !== null && $this->readyLockFile !== '') {
+            FileHelper::atomicWrite($this->readyLockFile, '');
+        }
+
         try {
             while ($channel->is_consuming()) {
                 if ($this->onStart) {
@@ -101,11 +107,19 @@ class RpcServer
             if ($channel->is_open()) {
                 $channel->close();
             }
+            if ($this->readyLockFile !== null && $this->readyLockFile !== '') {
+                FileHelper::removeFileQuietly($this->readyLockFile);
+            }
         }
     }
 
     public function setOnStart(Closure $param): void
     {
         $this->onStart = $param;
+    }
+
+    public function setReadyLockFile(?string $path): void
+    {
+        $this->readyLockFile = $path;
     }
 }

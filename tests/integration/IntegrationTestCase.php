@@ -208,6 +208,34 @@ class IntegrationTestCase extends TestCase
         return false;
     }
 
+    protected function waitForFileExists(string $path, int $timeoutSec): bool
+    {
+        $deadline = microtime(true) + max(0, $timeoutSec);
+
+        while (microtime(true) < $deadline) {
+            if (is_file($path)) {
+                return true;
+            }
+            usleep(10_000);
+        }
+
+        return false;
+    }
+
+    protected function waitForFileMissing(string $path, int $timeoutSec): bool
+    {
+        $deadline = microtime(true) + max(0, $timeoutSec);
+
+        while (microtime(true) < $deadline) {
+            if (!is_file($path)) {
+                return true;
+            }
+            usleep(10_000);
+        }
+
+        return !is_file($path);
+    }
+
     protected function getQueueCount(string $queue): int
     {
         $channel = $this->getChannel();

@@ -5,6 +5,7 @@ namespace illusiard\rabbitmq\tests\integration;
 use illusiard\rabbitmq\rpc\RpcClient;
 use illusiard\rabbitmq\rpc\RpcTimeoutException;
 use illusiard\rabbitmq\message\Envelope;
+use illusiard\rabbitmq\tests\helpers\ProcessHelper;
 
 /**
  * @group integration
@@ -54,7 +55,7 @@ class RpcIntegrationTest extends IntegrationTestCase
 
         $env = array_merge(getenv(), [
             'RPC_QUEUE' => $queue,
-            'RPC_READY_FILE' => $readyFile,
+            'READY_LOCK' => $readyFile,
         ]);
 
         $null = (stripos(PHP_OS_FAMILY, 'Windows') !== false) ? 'NUL' : '/dev/null';
@@ -64,46 +65,28 @@ class RpcIntegrationTest extends IntegrationTestCase
             2 => ['file', $null, 'w'],
         ];
 
-        $process = proc_open($cmd, $descriptors, $pipes, null, $env);
+        [$process, $pipes] = ProcessHelper::startProcess($cmd, $env, $descriptors);
         $this->assertIsResource($process);
 
         if (isset($pipes[0]) && is_resource($pipes[0])) {
             fclose($pipes[0]);
         }
 
-        $ready = $this->waitForReadyFile($readyFile, 10);
+        $ready = $this->waitForFileExists($readyFile, 10);
         $this->assertTrue($ready, 'RPC server did not become ready.');
 
-        return [$process, $readyFile];
-    }
-
-    private function waitForReadyFile(string $path, int $timeoutSec): bool
-    {
-        $deadline = microtime(true) + max(0, $timeoutSec);
-
-        while (microtime(true) < $deadline) {
-            if (is_file($path)) {
-                $data = @file_get_contents($path);
-                if (is_string($data) && str_contains($data, 'READY')) {
-                    return true;
-                }
-            }
-            usleep(10_000); // 10ms
-        }
-
-        return false;
+        return [$process, $pipes, $readyFile];
     }
 
     private function stopProcess(array $handle): void
     {
-        [$process, $readyFile] = $handle;
+        [$process, $pipes, $readyFile] = $handle;
 
-        if (is_resource($process)) {
-            proc_terminate($process);
-            proc_close($process);
-        }
+        ProcessHelper::terminateProcess($process);
+        ProcessHelper::closePipes($pipes);
 
         if (is_string($readyFile) && $readyFile !== '') {
+            $this->waitForFileMissing($readyFile, 5);
             @unlink($readyFile);
         }
     }

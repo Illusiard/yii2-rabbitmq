@@ -19,7 +19,7 @@ if (!getenv('CONSUME_QUEUE')) {
     exit(1);
 }
 
-$readyFile = getenv('CONSUMER_READY_FILE');
+$readyFile = getenv('READY_LOCK');
 
 $service = new RabbitMqService([
     'host' => getenv('RABBIT_HOST') ?: 'localhost',
