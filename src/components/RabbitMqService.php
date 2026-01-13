@@ -32,6 +32,9 @@ use illusiard\rabbitmq\definitions\registry\PublisherRegistry as DefinitionPubli
 use illusiard\rabbitmq\definitions\registry\MiddlewareRegistry as DefinitionMiddlewareRegistry;
 use illusiard\rabbitmq\definitions\registry\HandlerRegistry as DefinitionHandlerRegistry;
 use InvalidArgumentException;
+use illusiard\rabbitmq\topology\Topology;
+use illusiard\rabbitmq\topology\TopologyBuilder;
+use illusiard\rabbitmq\topology\TopologyApplier;
 
 class RabbitMqService extends Component
 {
@@ -417,14 +420,31 @@ class RabbitMqService extends Component
 
     public function setupTopology(array $config): void
     {
+        $topology = (new TopologyBuilder())->buildFromConfig($config);
+        $topology->validate();
+        $this->applyTopology($topology, false);
+    }
+
+    public function buildTopology(): Topology
+    {
+        return (new TopologyBuilder())->buildFromService($this);
+    }
+
+    public function applyTopology(Topology $topology, bool $dryRun = false): void
+    {
         $connection = $this->ensureConnection();
         if (!$connection instanceof AmqpConnection) {
             throw new ConnectionException('Topology setup requires AmqpConnection.', ErrorCode::CONNECTION_FAILED);
         }
 
-        $options = $config['options'] ?? [];
-        $manager = new TopologyManager($connection, $options);
-        $manager->apply($config, $options);
+        $channel = $connection->getAmqpConnection()->channel();
+        try {
+            (new TopologyApplier())->apply($topology, $channel, $dryRun);
+        } finally {
+            if ($channel->is_open()) {
+                $channel->close();
+            }
+        }
     }
 
     public function ping(int $timeout = 3): bool

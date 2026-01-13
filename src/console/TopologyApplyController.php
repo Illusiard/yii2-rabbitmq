@@ -7,7 +7,7 @@ use yii\console\Controller;
 use illusiard\rabbitmq\components\RabbitMqService;
 use InvalidArgumentException;
 
-class SetupTopologyController extends Controller
+class TopologyApplyController extends Controller
 {
     public string $component = 'rabbitmq';
     public bool $dryRun = false;

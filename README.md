@@ -219,7 +219,10 @@ services/rabbitmq/handlers/OrdersHandler.php
 ./yii rabbitmq/consume orders --component=rabbitmq2 --readyLock=/tmp/consumer.lock
 ```
 
-## Topology setup
+## Topology
+
+Topology описывает exchanges/queues/bindings и их аргументы. Это не publish‑опции и не retry‑политика.
+Если включён discovery, topology может дополняться из definitions через `getTopology()` или `getOptions()['topology']` (опционально).
 
 ```php
 return [
@@ -227,32 +230,37 @@ return [
         'rabbitmq' => [
             'class' => illusiard\\rabbitmq\\components\\RabbitMqService::class,
             'topology' => [
-                'options' => [
-                    'retryExchange' => 'retry-exchange',
-                    'strict' => true,
-                    'dryRun' => false,
-                ],
-                'main' => [
+                'exchanges' => [
                     [
-                        'queue' => 'orders',
-                        'exchange' => 'orders-exchange',
-                        'routingKey' => 'orders',
-                        'options' => [
-                            'deadLetterRoutingKey' => 'orders.retry',
+                        'name' => 'orders-exchange',
+                        'type' => 'direct',
+                        'durable' => true,
+                    ],
+                ],
+                'queues' => [
+                    [
+                        'name' => 'orders',
+                        'durable' => true,
+                        'arguments' => [
+                            'x-dead-letter-exchange' => 'orders-retry-exchange',
+                            'x-dead-letter-routing-key' => 'orders.retry',
+                        ],
+                    ],
+                    [
+                        'name' => 'orders.retry',
+                        'durable' => true,
+                        'arguments' => [
+                            'x-message-ttl' => 60000,
+                            'x-dead-letter-exchange' => 'orders-exchange',
+                            'x-dead-letter-routing-key' => 'orders',
                         ],
                     ],
                 ],
-                'retry' => [
+                'bindings' => [
                     [
-                        'queue' => 'orders.retry',
-                        'ttlMs' => 60000,
-                        'deadLetterExchange' => 'orders-exchange',
-                        'deadLetterRoutingKey' => 'orders',
-                    ],
-                ],
-                'dead' => [
-                    [
-                        'queue' => 'orders.dead',
+                        'exchange' => 'orders-exchange',
+                        'queue' => 'orders',
+                        'routingKey' => 'orders',
                     ],
                 ],
             ],
@@ -261,9 +269,12 @@ return [
 ];
 ```
 
+CLI:
+
 ```bash
-./yii rabbitmq/setup-topology
-./yii rabbitmq/setup-topology --dryRun=1 --strict=1
+./yii rabbitmq/topology-apply
+./yii rabbitmq/topology-apply --dryRun=1 --strict=1
+./yii rabbitmq/topology-status
 ```
 
 ## Confirm/mandatory
@@ -458,7 +469,7 @@ Confirm timeout:
 - timeout не означает, что сообщение не принято — смотрите confirms и return события
 
 Exchange/queue not declared:
-- выполните `rabbitmq/setup-topology` или проверьте provisioning инфраструктуры
+- выполните `rabbitmq/topology-apply` или проверьте provisioning инфраструктуры
 
 Permissions/vhost errors:
 - проверьте `vhost`, права пользователя и учётные данные

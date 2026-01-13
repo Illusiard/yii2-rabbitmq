@@ -15,6 +15,12 @@ use illusiard\rabbitmq\console\DlqReplayController;
 use illusiard\rabbitmq\console\ConsumersController;
 use illusiard\rabbitmq\console\PublishersController;
 use illusiard\rabbitmq\console\MiddlewaresController;
+use illusiard\rabbitmq\console\TopologyApplyController;
+use illusiard\rabbitmq\console\TopologyStatusController;
+use illusiard\rabbitmq\topology\Topology;
+use illusiard\rabbitmq\topology\ExchangeDefinition;
+use illusiard\rabbitmq\topology\QueueDefinition;
+use illusiard\rabbitmq\topology\BindingDefinition;
 
 class ConsoleControllersTest extends TestCase
 {
@@ -109,6 +115,8 @@ class ConsoleControllersTest extends TestCase
             new DlqReplayController('rabbitmq/dlq-replay', Yii::$app),
             new HealthcheckController('rabbitmq/healthcheck', Yii::$app),
             new SetupTopologyController('rabbitmq/setup-topology', Yii::$app),
+            new TopologyApplyController('rabbitmq/topology-apply', Yii::$app),
+            new TopologyStatusController('rabbitmq/topology-status', Yii::$app),
         ];
 
         foreach ($controllers as $controller) {
@@ -145,16 +153,11 @@ class ConsoleControllersTest extends TestCase
     public function testSetupTopologyPassesDryRunAndStrict(): void
     {
         $service = new ConsoleTestRabbitMqService();
-        $service->topology = [
-            'options' => [],
-            'main' => [
-                [
-                    'queue' => 'orders',
-                    'exchange' => 'orders-ex',
-                    'routingKey' => 'orders',
-                ],
-            ],
-        ];
+        $topology = new Topology();
+        $topology->addExchange(new ExchangeDefinition('orders-ex', 'direct'));
+        $topology->addQueue(new QueueDefinition('orders'));
+        $topology->addBinding(new BindingDefinition('orders-ex', 'orders', 'orders'));
+        $service->buildTopologyReturn = $topology;
         Yii::$app->set('rabbitmq', $service);
 
         $controller = new SetupTopologyController('rabbitmq/setup-topology', Yii::$app);
@@ -164,9 +167,9 @@ class ConsoleControllersTest extends TestCase
         $exitCode = $controller->actionIndex();
 
         $this->assertSame(0, $exitCode);
-        $this->assertTrue($service->setupTopologyCalled);
-        $this->assertTrue($service->lastTopology['options']['dryRun']);
-        $this->assertTrue($service->lastTopology['options']['strict']);
+        $this->assertTrue($service->buildTopologyCalled);
+        $this->assertTrue($service->applyTopologyCalled);
+        $this->assertTrue($service->lastDryRun);
     }
 }
 
@@ -191,8 +194,10 @@ class ConsoleTestRabbitMqService extends \illusiard\rabbitmq\components\RabbitMq
     public bool $pingResult = true;
     public ?string $lastError = null;
     public array $profiles = [];
-    public bool $setupTopologyCalled = false;
-    public array $lastTopology = [];
+    public bool $buildTopologyCalled = false;
+    public bool $applyTopologyCalled = false;
+    public ?Topology $buildTopologyReturn = null;
+    public bool $lastDryRun = false;
     public bool $pingCalled = false;
 
     public function ping(int $timeout = 3): bool
@@ -211,9 +216,19 @@ class ConsoleTestRabbitMqService extends \illusiard\rabbitmq\components\RabbitMq
         return $this;
     }
 
-    public function setupTopology(array $config): void
+    public function buildTopology(): Topology
     {
-        $this->setupTopologyCalled = true;
-        $this->lastTopology = $config;
+        $this->buildTopologyCalled = true;
+        if ($this->buildTopologyReturn instanceof Topology) {
+            return $this->buildTopologyReturn;
+        }
+
+        return new Topology();
+    }
+
+    public function applyTopology(Topology $topology, bool $dryRun = false): void
+    {
+        $this->applyTopologyCalled = true;
+        $this->lastDryRun = $dryRun;
     }
 }

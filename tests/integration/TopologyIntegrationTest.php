@@ -2,9 +2,10 @@
 
 namespace illusiard\rabbitmq\tests\integration;
 
-use illusiard\rabbitmq\amqp\TopologyManager;
-use illusiard\rabbitmq\exceptions\RabbitMqException;
-use illusiard\rabbitmq\exceptions\ErrorCode;
+use illusiard\rabbitmq\topology\Topology;
+use illusiard\rabbitmq\topology\ExchangeDefinition;
+use illusiard\rabbitmq\topology\QueueDefinition;
+use illusiard\rabbitmq\topology\BindingDefinition;
 
 /**
  * @group integration
@@ -17,21 +18,12 @@ class TopologyIntegrationTest extends IntegrationTestCase
         $queue = $this->uniqueName('dry_q');
         $routingKey = 'rk';
 
-        $manager = new TopologyManager($this->service->getConnection(), ['dryRun' => true]);
-        $config = [
-            'options' => [
-                'dryRun' => true,
-            ],
-            'main' => [
-                [
-                    'queue' => $queue,
-                    'exchange' => $exchange,
-                    'routingKey' => $routingKey,
-                ],
-            ],
-        ];
+        $topology = new Topology();
+        $topology->addExchange(new ExchangeDefinition($exchange, 'direct'));
+        $topology->addQueue(new QueueDefinition($queue));
+        $topology->addBinding(new BindingDefinition($exchange, $queue, $routingKey));
 
-        $manager->apply($config, ['dryRun' => true]);
+        $this->service->applyTopology($topology, true);
 
         $channel = $this->getChannel();
         $created = true;
@@ -48,25 +40,21 @@ class TopologyIntegrationTest extends IntegrationTestCase
         $this->assertFalse($created, 'Dry-run should not create queues.');
     }
 
-    public function testAMQP_TOPOLOGY_02_strictValidation(): void
+    public function testAMQP_TOPOLOGY_02_applyCreatesTopology(): void
     {
-        $manager = new TopologyManager($this->service->getConnection(), ['strict' => true]);
+        $exchange = $this->uniqueName('ex');
+        $queue = $this->uniqueName('q');
+        $routingKey = 'rk';
 
-        $config = [
-            'main' => [
-                [
-                    'queue' => '',
-                    'exchange' => 'ex',
-                    'routingKey' => 'rk',
-                ],
-            ],
-        ];
+        $topology = new Topology();
+        $topology->addExchange(new ExchangeDefinition($exchange, 'direct'));
+        $topology->addQueue(new QueueDefinition($queue));
+        $topology->addBinding(new BindingDefinition($exchange, $queue, $routingKey));
 
-        try {
-            $manager->apply($config, ['strict' => true]);
-            $this->fail('Expected topology validation error.');
-        } catch (RabbitMqException $e) {
-            $this->assertSame(ErrorCode::TOPOLOGY_INVALID, $e->getErrorCode());
-        }
+        $this->service->applyTopology($topology, false);
+
+        $this->publishRaw('demo', $exchange, $routingKey);
+        $message = $this->waitForMessage($queue, 3);
+        $this->assertNotNull($message);
     }
 }
