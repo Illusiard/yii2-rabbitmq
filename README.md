@@ -10,7 +10,7 @@
 composer require illusiard/yii2-rabbitmq
 ```
 
-Конфигурация:
+Минимальная конфигурация компонента:
 
 ```php
 return [
@@ -21,22 +21,39 @@ return [
             'port' => 5672,
             'user' => 'guest',
             'password' => 'guest',
-            'vhost' => '/',
-            'heartbeat' => 30,
-            'readWriteTimeout' => 3,
-            'connectionTimeout' => 3,
-            'ssl' => null,
-            'confirm' => false,
-            'mandatory' => false,
-            'publishTimeout' => 5,
-            'managedRetry' => false,
-            'retryPolicy' => [],
-            'serializer' => illusiard\\rabbitmq\\message\\JsonMessageSerializer::class,
-            'publishMiddlewares' => [],
-            'consumeMiddlewares' => [],
         ],
     ],
 ];
+```
+
+Discovery для CLI:
+
+```php
+'components' => [
+    'rabbitmq' => [
+        'class' => illusiard\\rabbitmq\\components\\RabbitMqService::class,
+        'discovery' => [
+            'enabled' => true,
+            'paths' => [
+                '@app/services/rabbitmq/consumers',
+                '@app/services/rabbitmq/publishers',
+                '@app/services/rabbitmq/middlewares',
+                '@app/services/rabbitmq/handlers', // опционально
+            ],
+            'cache' => 'cache',
+            'cacheTtl' => 300,
+        ],
+    ],
+],
+```
+
+Структура папок:
+
+```
+services/rabbitmq/consumers/OrdersConsumer.php
+services/rabbitmq/publishers/OrdersPublisher.php
+services/rabbitmq/middlewares/TraceIdMiddleware.php
+services/rabbitmq/handlers/OrdersHandler.php
 ```
 
 Publish:
@@ -180,30 +197,30 @@ class RabbitMqProfile implements RabbitMqProfileInterface
 - lists (numeric arrays): concat с уникальностью, defaults -> overrides
 - если overrides содержит key => null, то дефолтный ключ удаляется
 
-## Consumer
+## Consumer definition
 
-Consumer class:
+Consumer class (definitions):
 
 ```php
 <?php
 
 namespace app\\services\\rabbitmq\\consumers;
 
-use illusiard\\rabbitmq\\consumer\\ConsumerInterface;
+use illusiard\\rabbitmq\\definitions\\consumer\\ConsumerInterface;
 
 class OrdersConsumer implements ConsumerInterface
 {
-    public function queue(): string
+    public function getQueue(): string
     {
         return 'orders';
     }
 
-    public function handler()
+    public function getHandler()
     {
         return \\app\\queues\\RabbitMqHandler::class;
     }
 
-    public function options(): array
+    public function getOptions(): array
     {
         return [
             'prefetch' => 1,
@@ -217,48 +234,27 @@ class OrdersConsumer implements ConsumerInterface
 
 ID берется из имени класса: `OrdersConsumer` -> `orders`, `AuditLogConsumer` -> `audit-log`.
 
-## Console consume
+## CLI
+
+Команды:
+
+```bash
+./yii rabbitmq/consume <consumer-id>
+./yii rabbitmq/consumers
+./yii rabbitmq/publishers
+./yii rabbitmq/middlewares
+./yii rabbitmq/topology-apply
+./yii rabbitmq/topology-status
+```
 
 CLI `rabbitmq/consume` запускает `ConsumeRunner` и использует ту же семантику пайплайна (middlewares, ExceptionClassifier, managed retry).  
-Запуск идёт по `consumer-id`, полученному из discovery.
+Запуск идёт по `consumer-id`, полученному из discovery. Если discovery выключен или paths не заданы, CLI вернет ошибку.
 
-Discovery включается в конфиге компонента:
-
-```php
-'components' => [
-    'rabbitmq' => [
-        'class' => illusiard\\rabbitmq\\components\\RabbitMqService::class,
-        'discovery' => [
-            'enabled' => true,
-            'paths' => [
-                '@app/services/rabbitmq/consumers',
-                '@app/services/rabbitmq/publishers',
-                '@app/services/rabbitmq/middlewares',
-                '@app/services/rabbitmq/handlers', // опционально
-            ],
-            'cache' => 'cache',
-            'cacheTtl' => 300,
-        ],
-    ],
-],
-```
-
-Если discovery выключен или paths не заданы, CLI вернет ошибку.
-
-Структура папок (как migrations, из `@app` и base namespace `app`):
-
-```
-services/rabbitmq/consumers/OrdersConsumer.php
-services/rabbitmq/publishers/OrdersPublisher.php
-services/rabbitmq/middlewares/TraceIdMiddleware.php
-services/rabbitmq/handlers/OrdersHandler.php
-```
-
-Ключевые опции CLI:
+Ключевые опции `rabbitmq/consume`:
 - `--managedRetry=1` и `--retryPolicy='{"maxAttempts":3,"retryQueues":[...],"deadQueue":"..."}'` (x-retry-count, retry/dead)
 - `--consumeFailFast=0|1`, `--fatalExceptionClasses=...`, `--recoverableExceptionClasses=...`
 - `--memoryLimitMb=...` (добавляет memory-limit middleware)
-- `--readyLock=/path/to/lock` (опциональный lock-файл готовности)
+- `--readyLock=/path/to/lock` (lock-файл готовности)
 
 Пример:
 
@@ -347,14 +343,25 @@ CLI:
 ./yii rabbitmq/topology-status
 ```
 
-## Confirm/mandatory
+## Consume semantics
+
+- Handler может вернуть `ConsumeResult` или legacy `bool`.
+  - `true` → ACK
+  - `false` → RETRY (дальше применяется retry policy)
+- ExceptionClassifier:
+  - `consumeFailFast=true` превращает fatal исключения в `ConsumeResult::stop()` и завершает consumer.
+  - Recoverable исключения приводят к `ConsumeResult::retry()`.
+- Managed retry использует `x-retry-count` и не опирается на `x-death`.
+
+## Publish semantics
 
 - `confirm=true` включает publisher confirms: публикация ждёт ack/nack, при nack или таймауте будет `PublishException`.
 - `mandatory=true` включает mandatory publish: unroutable сообщения фиксируются через ReturnSink, без блокирующего ожидания.
 - `mandatoryStrict=true` (по умолчанию) делает unroutable ошибкой при `confirm=true` — будет `PublishException(PUBLISH_UNROUTABLE)`.
 - `publishTimeout` задаёт таймаут ожидания подтверждения при `confirm=true`.
 
-Возвраты обрабатываются через ReturnSink и доступны через `tick()` + `drainReturns()`. Это best‑effort для mandatory‑only: ошибки доставки нужно опрашивать.
+Возвраты обрабатываются через ReturnSink и доступны через `tick()` + `drainReturns()`.  
+В режиме `mandatory=true` без confirms это best‑effort: ошибки доставки нужно опрашивать.
 
 ## ReturnSink и tick/poll
 
@@ -406,9 +413,10 @@ $returns = $rabbit->drainReturns();
 ],
 ```
 
-Handler может возвращать `ConsumeResult` или legacy `bool`:
-- `true` → ACK
-- `false` → RETRY (дальше применяется retry policy)
+## Ready protocol
+
+CLI consumer readiness сигнализируется lock-файлом (stdout не используется).  
+`--readyLock=/path/to/lock` создаёт lock-файл при старте и удаляет при остановке.
 
 ## Serialization & Envelope
 
@@ -594,6 +602,29 @@ Consumer restart strategy:
 ```bash
 vendor/bin/phpunit -c phpunit.integration.xml
 ```
+
+Локальный RabbitMQ (docker compose):
+
+```bash
+docker compose up -d rabbitmq
+```
+
+```yaml
+## docker-compose.yml
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+```
+
+Env для подключения:
+- `RABBIT_HOST` (default: localhost)
+- `RABBIT_PORT` (default: 5672)
+- `RABBIT_USER` (default: guest)
+- `RABBIT_PASSWORD` (default: guest)
+- `RABBIT_VHOST` (default: /)
 
 Env-флаги:
 - `NACK_CAN_BE_FORCED` (confirm NACK path)

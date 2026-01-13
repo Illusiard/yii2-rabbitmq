@@ -3,17 +3,13 @@
 namespace illusiard\rabbitmq\console;
 
 use Closure;
-use illusiard\rabbitmq\components\RabbitMqService;
 use Yii;
-use yii\console\Controller;
 use illusiard\rabbitmq\exceptions\FatalException;
 use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
 use illusiard\rabbitmq\orchestration\RunnerOptions;
-use InvalidArgumentException;
 
-class ConsumeController extends Controller
+class ConsumeController extends BaseRabbitMqController
 {
-    public string $component = 'rabbitmq';
     public ?int      $managedRetry                = null;
     public ?string   $retryPolicy                 = null;
     public ?int      $consumeFailFast             = null;
@@ -23,10 +19,9 @@ class ConsumeController extends Controller
     private ?RunnerOptions $runnerOptions         = null;
     public ?string $readyLock                     = null;
 
-    public function options($actionID)
+    public function options($actionID): array
     {
         return array_merge(parent::options($actionID), [
-            'component',
             'managedRetry',
             'retryPolicy',
             'consumeFailFast',
@@ -36,10 +31,9 @@ class ConsumeController extends Controller
         ]);
     }
 
-    public function optionAliases()
+    public function optionAliases(): array
     {
         return array_merge(parent::optionAliases(), [
-            'c' => 'component',
             'r' => 'readyLock',
         ]);
     }
@@ -191,16 +185,4 @@ class ConsumeController extends Controller
     {
         $this->runnerOptions = $options;
     }
-
-    private function getRabbitService(): RabbitMqService
-    {
-        $service = Yii::$app->get($this->component);
-        if (!$service instanceof RabbitMqService) {
-            throw new InvalidArgumentException("Component '{$this->component}' must be an instance of RabbitMqService.");
-        }
-
-        return $service;
-    }
-
-    // Consumer/handler normalization is handled by ConsumeRunner.
 }

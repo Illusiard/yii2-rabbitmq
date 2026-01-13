@@ -2,27 +2,15 @@
 
 namespace illusiard\rabbitmq\console;
 
-use Yii;
-use yii\console\Controller;
 use illusiard\rabbitmq\dlq\DlqService;
-use illusiard\rabbitmq\components\RabbitMqService;
-use InvalidArgumentException;
 
-class DlqPurgeController extends Controller
+class DlqPurgeController extends BaseRabbitMqController
 {
-    public string $component = 'rabbitmq';
     public int $force = 0;
 
-    public function options($actionID)
+    public function options($actionID): array
     {
-        return array_merge(parent::options($actionID), ['component', 'force']);
-    }
-
-    public function optionAliases()
-    {
-        return array_merge(parent::optionAliases(), [
-            'c' => 'component',
-        ]);
+        return array_merge(parent::options($actionID), ['force']);
     }
 
     public function actionIndex(string $queue): int
@@ -43,13 +31,4 @@ class DlqPurgeController extends Controller
         }
     }
 
-    private function getRabbitService(): RabbitMqService
-    {
-        $service = Yii::$app->get($this->component);
-        if (!$service instanceof RabbitMqService) {
-            throw new InvalidArgumentException("Component '{$this->component}' must be an instance of RabbitMqService.");
-        }
-
-        return $service;
-    }
 }

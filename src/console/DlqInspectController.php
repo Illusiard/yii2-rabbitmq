@@ -3,30 +3,19 @@
 namespace illusiard\rabbitmq\console;
 
 use Yii;
-use yii\console\Controller;
 use illusiard\rabbitmq\dlq\DlqService;
 use PhpAmqpLib\Wire\AMQPTable;
-use illusiard\rabbitmq\components\RabbitMqService;
-use InvalidArgumentException;
 
-class DlqInspectController extends Controller
+class DlqInspectController extends BaseRabbitMqController
 {
-    public string $component = 'rabbitmq';
     public int $limit = 10;
     public int $json = 0;
     public int $ack = 0;
     public int $force = 0;
 
-    public function options($actionID)
+    public function options($actionID): array
     {
-        return array_merge(parent::options($actionID), ['component', 'limit', 'json', 'ack', 'force']);
-    }
-
-    public function optionAliases()
-    {
-        return array_merge(parent::optionAliases(), [
-            'c' => 'component',
-        ]);
+        return array_merge(parent::options($actionID), ['limit', 'json', 'ack', 'force']);
     }
 
     public function actionIndex(string $queue): int
@@ -92,13 +81,4 @@ class DlqInspectController extends Controller
         return $value;
     }
 
-    private function getRabbitService(): RabbitMqService
-    {
-        $service = Yii::$app->get($this->component);
-        if (!$service instanceof RabbitMqService) {
-            throw new InvalidArgumentException("Component '{$this->component}' must be an instance of RabbitMqService.");
-        }
-
-        return $service;
-    }
 }

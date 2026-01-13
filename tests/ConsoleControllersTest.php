@@ -85,6 +85,27 @@ class ConsoleControllersTest extends TestCase
         $this->assertSame(1, $exitCode);
     }
 
+    public function testDlqPurgeRequiresForce(): void
+    {
+        $controller = new DlqPurgeController('rabbitmq/dlq-purge', Yii::$app);
+        $controller->force = 0;
+
+        $exitCode = $controller->actionIndex('orders.dead');
+
+        $this->assertSame(1, $exitCode);
+    }
+
+    public function testDlqReplayRequiresExchangeAndRoutingKey(): void
+    {
+        $controller = new DlqReplayController('rabbitmq/dlq-replay', Yii::$app);
+        $controller->exchange = '';
+        $controller->routingKey = '';
+
+        $exitCode = $controller->actionIndex('orders.dead');
+
+        $this->assertSame(1, $exitCode);
+    }
+
     public function testHealthcheckExitCodeDependsOnPing(): void
     {
         $service = new ConsoleTestRabbitMqService();
@@ -129,6 +150,36 @@ class ConsoleControllersTest extends TestCase
         }
     }
 
+    public function testControllerOptionsIncludeExpectedFlags(): void
+    {
+        $matrix = [
+            ConsumeController::class => [
+                'managedRetry',
+                'retryPolicy',
+                'consumeFailFast',
+                'fatalExceptionClasses',
+                'recoverableExceptionClasses',
+                'readyLock',
+            ],
+            DlqInspectController::class => ['limit', 'json', 'ack', 'force'],
+            DlqReplayController::class => ['exchange', 'routingKey', 'limit'],
+            DlqPurgeController::class => ['force'],
+            HealthcheckController::class => ['profile', 'timeout', 'json'],
+            SetupTopologyController::class => ['dryRun', 'strict'],
+            TopologyApplyController::class => ['dryRun', 'strict'],
+            TopologyStatusController::class => ['strict'],
+        ];
+
+        foreach ($matrix as $class => $expected) {
+            $controller = new $class('rabbitmq/test', Yii::$app);
+            $options = $controller->options('index');
+
+            foreach ($expected as $option) {
+                $this->assertContains($option, $options);
+            }
+        }
+    }
+
     public function testComponentOverrideIsUsed(): void
     {
         $default = new ConsoleTestRabbitMqService();
@@ -170,6 +221,30 @@ class ConsoleControllersTest extends TestCase
         $this->assertTrue($service->buildTopologyCalled);
         $this->assertTrue($service->applyTopologyCalled);
         $this->assertTrue($service->lastDryRun);
+    }
+
+    public function testTopologyApplyRequiresNonEmptyTopology(): void
+    {
+        $service = new ConsoleTestRabbitMqService();
+        $service->buildTopologyReturn = new Topology();
+        Yii::$app->set('rabbitmq', $service);
+
+        $controller = new TopologyApplyController('rabbitmq/topology-apply', Yii::$app);
+        $exitCode = $controller->actionIndex();
+
+        $this->assertSame(1, $exitCode);
+    }
+
+    public function testTopologyStatusRequiresNonEmptyTopology(): void
+    {
+        $service = new ConsoleTestRabbitMqService();
+        $service->buildTopologyReturn = new Topology();
+        Yii::$app->set('rabbitmq', $service);
+
+        $controller = new TopologyStatusController('rabbitmq/topology-status', Yii::$app);
+        $exitCode = $controller->actionIndex();
+
+        $this->assertSame(1, $exitCode);
     }
 }
 

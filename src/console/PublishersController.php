@@ -2,27 +2,8 @@
 
 namespace illusiard\rabbitmq\console;
 
-use Yii;
-use yii\console\Controller;
-use illusiard\rabbitmq\components\RabbitMqService;
-use InvalidArgumentException;
-
-class PublishersController extends Controller
+class PublishersController extends BaseRabbitMqController
 {
-    public string $component = 'rabbitmq';
-
-    public function options($actionID)
-    {
-        return array_merge(parent::options($actionID), ['component']);
-    }
-
-    public function optionAliases()
-    {
-        return array_merge(parent::optionAliases(), [
-            'c' => 'component',
-        ]);
-    }
-
     public function actionIndex(): int
     {
         try {
@@ -46,13 +27,4 @@ class PublishersController extends Controller
         return 0;
     }
 
-    private function getRabbitService(): RabbitMqService
-    {
-        $service = Yii::$app->get($this->component);
-        if (!$service instanceof RabbitMqService) {
-            throw new InvalidArgumentException("Component '{$this->component}' must be an instance of RabbitMqService.");
-        }
-
-        return $service;
-    }
 }
