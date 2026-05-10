@@ -12,12 +12,17 @@ use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\definitions\consume\MessageMeta;
 use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
+use Throwable;
 
 /**
  * @group integration
  */
 class RetryIntegrationTest extends IntegrationTestCase
 {
+    /**
+     * @return void
+     * @throws Throwable
+     */
     public function testAMQP_RETRY_01_managedRetryIncrementsCount(): void
     {
         $main = $this->uniqueName('orders');
@@ -60,9 +65,9 @@ class RetryIntegrationTest extends IntegrationTestCase
         };
 
         $pipelineHandler = $this->buildPipelineHandler($main, $handler, $options);
-        $consumer->consume($main, $pipelineHandler, 1);
+        $consumer->consume($main, $pipelineHandler);
 
-        $message = $this->waitForMessage($retry1, 5);
+        $message = $this->waitForMessage($retry1);
         $this->assertNotNull($message);
 
         $properties = $message->get_properties();
@@ -74,6 +79,10 @@ class RetryIntegrationTest extends IntegrationTestCase
         $this->assertSame(1, $headers['x-retry-count'] ?? null);
     }
 
+    /**
+     * @return void
+     * @throws Throwable
+     */
     public function testAMQP_RETRY_02_deadDecision(): void
     {
         $main = $this->uniqueName('orders');
@@ -109,9 +118,9 @@ class RetryIntegrationTest extends IntegrationTestCase
         };
 
         $pipelineHandler = $this->buildPipelineHandler($main, $handler, $options);
-        $consumer->consume($main, $pipelineHandler, 1);
+        $consumer->consume($main, $pipelineHandler);
 
-        $message = $this->waitForMessage($dead, 5);
+        $message = $this->waitForMessage($dead);
         $this->assertNotNull($message);
 
         $properties = $message->get_properties();
@@ -163,7 +172,7 @@ class RetryIntegrationTest extends IntegrationTestCase
         $exceptionMiddleware = new ExceptionHandlingMiddleware($classifier);
         $retryMiddleware = new RetryPolicyMiddleware($retryPolicy);
 
-        $core = function (ConsumeContext $context) use ($handler): ConsumeResult {
+        $core = static function (ConsumeContext $context) use ($handler): ConsumeResult {
             $meta = $context->getMeta();
             $metaArray = [
                 'body' => $meta->getBody(),
@@ -179,7 +188,7 @@ class RetryIntegrationTest extends IntegrationTestCase
             return ConsumeResult::normalizeHandlerResult($result);
         };
 
-        $pipeline = function (ConsumeContext $context) use ($exceptionMiddleware, $retryMiddleware, $core): ConsumeResult {
+        $pipeline = static function (ConsumeContext $context) use ($exceptionMiddleware, $retryMiddleware, $core): ConsumeResult {
             $next = function (ConsumeContext $context) use ($retryMiddleware, $core): ConsumeResult {
                 return $retryMiddleware->process($context, $core);
             };
@@ -193,7 +202,7 @@ class RetryIntegrationTest extends IntegrationTestCase
             $deliveryTag = isset($meta['delivery_tag']) && is_int($meta['delivery_tag']) ? $meta['delivery_tag'] : null;
             $routingKey = isset($meta['routing_key']) && is_string($meta['routing_key']) ? $meta['routing_key'] : null;
             $exchange = isset($meta['exchange']) && is_string($meta['exchange']) ? $meta['exchange'] : null;
-            $redelivered = isset($meta['redelivered']) ? (bool)$meta['redelivered'] : false;
+            $redelivered = isset($meta['redelivered']) && $meta['redelivered'];
 
             $messageMeta = new MessageMeta($headers, $properties, $body, $deliveryTag, $routingKey, $exchange, $redelivered);
             $envelope = $this->service->decodeEnvelope($body, $meta);

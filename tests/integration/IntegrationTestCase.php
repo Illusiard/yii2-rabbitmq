@@ -2,6 +2,7 @@
 
 namespace illusiard\rabbitmq\tests\integration;
 
+use PhpAmqpLib\Wire\AMQPTable;
 use PHPUnit\Framework\TestCase;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Message\AMQPMessage;
@@ -122,7 +123,7 @@ class IntegrationTestCase extends TestCase
         $channel = $this->getChannel();
         try {
             if (!empty($arguments)) {
-                $channel->queue_declare($name, false, $durable, false, false, false, new \PhpAmqpLib\Wire\AMQPTable($arguments));
+                $channel->queue_declare($name, false, $durable, false, false, false, new AMQPTable($arguments));
             } else {
                 $channel->queue_declare($name, false, $durable, false, false);
             }
@@ -156,7 +157,7 @@ class IntegrationTestCase extends TestCase
         $channel = $this->getChannel();
         try {
             if (!empty($headers)) {
-                $properties['application_headers'] = new \PhpAmqpLib\Wire\AMQPTable($headers);
+                $properties['application_headers'] = new AMQPTable($headers);
             }
             $message = new AMQPMessage($body, $properties);
             $channel->basic_publish($message, $exchange, $routingKey);

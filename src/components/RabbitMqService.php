@@ -3,10 +3,12 @@
 namespace illusiard\rabbitmq\components;
 
 use illusiard\rabbitmq\amqp\AmqpConsumer;
+use ReflectionException;
+use ReflectionFunction;
+use Throwable;
 use Yii;
 use yii\base\Component;
 use illusiard\rabbitmq\amqp\AmqpConnection;
-use illusiard\rabbitmq\amqp\TopologyManager;
 use illusiard\rabbitmq\contracts\ConnectionInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;
 use illusiard\rabbitmq\exceptions\ConnectionException;
@@ -43,60 +45,67 @@ use InvalidArgumentException;
 use illusiard\rabbitmq\topology\Topology;
 use illusiard\rabbitmq\topology\TopologyBuilder;
 use illusiard\rabbitmq\topology\TopologyApplier;
+use yii\base\InvalidConfigException;
 
+/**
+ *
+ * @property-read DiscoveryConfig $discoveryConfigOrThrow
+ * @property-write array          $upTopology
+ * @property-read array           $connectionConfig
+ */
 class RabbitMqService extends Component
 {
-    public string  $host                        = '127.0.0.1';
-    public int     $port                        = 5672;
-    public string  $user                        = 'guest';
-    public string  $password                    = 'guest';
-    public string  $vhost                       = '/';
-    public int     $heartbeat                   = 30;
-    public int     $readWriteTimeout            = 3;
-    public int     $connectionTimeout           = 3;
-    public ?array  $ssl                         = null;
-    public array   $topology                    = [];
-    public bool    $confirm                     = false;
-    public bool    $mandatory                   = false;
-    public bool    $mandatoryStrict             = true;
-    public int     $publishTimeout              = 5;
-    public bool    $managedRetry                = false;
-    public array   $retryPolicy                 = [];
-    public array   $profiles                    = [];
-    public string  $defaultProfile              = 'default';
-    public         $serializer                  = JsonMessageSerializer::class;
-    public array   $publishMiddlewares          = [];
-    public array   $consumeMiddlewares          = [];
-    public bool    $consumeFailFast             = true;
-    public array   $fatalExceptionClasses       = [];
-    public array   $recoverableExceptionClasses = [];
-    public         $returnHandler               = LoggingReturnHandler::class;
-    public bool    $returnHandlerEnabled        = true;
-    public         $returnSink                  = InMemoryReturnSink::class;
-    public bool    $returnSinkEnabled           = true;
-    public ?string $componentId                 = null;
-    public array   $discovery                   = [];
-    public         $profile                     = null;
+    public string       $host                        = '127.0.0.1';
+    public int          $port                        = 5672;
+    public string       $user                        = 'guest';
+    public string       $password                    = 'guest';
+    public string       $vhost                       = '/';
+    public int          $heartbeat                   = 30;
+    public int          $readWriteTimeout            = 3;
+    public int          $connectionTimeout           = 3;
+    public ?array       $ssl                         = null;
+    public array        $topology                    = [];
+    public bool         $confirm                     = false;
+    public bool         $mandatory                   = false;
+    public bool         $mandatoryStrict             = true;
+    public int          $publishTimeout              = 5;
+    public bool         $managedRetry                = false;
+    public array        $retryPolicy                 = [];
+    public array        $profiles                    = [];
+    public string       $defaultProfile              = 'default';
+    public array|string $serializer                  = JsonMessageSerializer::class;
+    public array        $publishMiddlewares          = [];
+    public array        $consumeMiddlewares          = [];
+    public bool         $consumeFailFast             = true;
+    public array        $fatalExceptionClasses       = [];
+    public array        $recoverableExceptionClasses = [];
+    public array|string $returnHandler               = LoggingReturnHandler::class;
+    public bool         $returnHandlerEnabled        = true;
+    public array|string $returnSink                  = InMemoryReturnSink::class;
+    public bool         $returnSinkEnabled           = true;
+    public ?string      $componentId                 = null;
+    public array        $discovery                   = [];
+    public mixed        $profile                     = null;
 
     /** @var callable|null */
     public $connectionFactory;
 
-    private ?ConnectionInterface        $connection         = null;
-    private ?PublisherInterface         $publisher          = null;
-    private ?MessageSerializerInterface $serializerInstance = null;
-    private ?PublishPipeline            $publishPipeline    = null;
-    private ?ConsumePipeline            $consumePipeline    = null;
-    private ?ReturnHandlerInterface     $returnHandlerInstance = null;
-    private ?ReturnSinkInterface        $returnSinkInstance = null;
-    private ?string                     $activeProfile      = null;
-    private ?string                     $lastError          = null;
-    private ?DefinitionConsumerRegistry $consumerRegistry   = null;
-    private ?DefinitionPublisherRegistry $publisherRegistry = null;
-    private ?DefinitionMiddlewareRegistry $middlewareRegistry = null;
-    private ?DefinitionHandlerRegistry $handlerRegistry = null;
-    private ?RabbitMqProfileInterface $profileInstance = null;
+    private ?ConnectionInterface          $connection            = null;
+    private ?PublisherInterface           $publisher             = null;
+    private ?MessageSerializerInterface   $serializerInstance    = null;
+    private ?PublishPipeline              $publishPipeline       = null;
+    private ?ConsumePipeline              $consumePipeline       = null;
+    private ?ReturnHandlerInterface       $returnHandlerInstance = null;
+    private ?ReturnSinkInterface          $returnSinkInstance    = null;
+    private ?string                       $activeProfile         = null;
+    private ?string                       $lastError             = null;
+    private ?DefinitionConsumerRegistry   $consumerRegistry      = null;
+    private ?DefinitionPublisherRegistry  $publisherRegistry     = null;
+    private ?DefinitionMiddlewareRegistry $middlewareRegistry    = null;
+    private ?DefinitionHandlerRegistry    $handlerRegistry       = null;
+    private ?RabbitMqProfileInterface     $profileInstance       = null;
 
-    public function init()
+    public function init(): void
     {
         parent::init();
 
@@ -137,7 +146,7 @@ class RabbitMqService extends Component
             $validator->validate($config);
         } catch (RabbitMqException $e) {
             throw $e;
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             throw new RabbitMqException(
                 'Config validation failed: ' . $e->getMessage(),
                 ErrorCode::CONFIG_INVALID,
@@ -147,6 +156,15 @@ class RabbitMqService extends Component
         }
     }
 
+    /**
+     * @param string $body
+     * @param string $exchange
+     * @param string $routingKey
+     * @param array  $properties
+     * @param array  $headers
+     *
+     * @return void
+     */
     public function publish(
         string $body,
         string $exchange = '',
@@ -156,11 +174,9 @@ class RabbitMqService extends Component
     ): void {
         try {
             $this->getPublisher()->publish($body, $exchange, $routingKey, $properties, $headers);
-        } catch (ConnectionException $e) {
+        } catch (ConnectionException|PublishException $e) {
             throw $e;
-        } catch (PublishException $e) {
-            throw $e;
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             throw new PublishException('Publish failed: ' . $e->getMessage(), ErrorCode::PUBLISH_FAILED, 0, $e);
         }
     }
@@ -173,6 +189,14 @@ class RabbitMqService extends Component
         return $clone;
     }
 
+    /**
+     * @param Envelope $env
+     * @param string   $exchange
+     * @param string   $routingKey
+     *
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function publishEnvelope(Envelope $env, string $exchange = '', string $routingKey = ''): void
     {
         $context = $this->buildPublishContext($exchange, $routingKey);
@@ -195,6 +219,16 @@ class RabbitMqService extends Component
         });
     }
 
+    /**
+     * @param string $body
+     * @param string $exchange
+     * @param string $routingKey
+     * @param array  $properties
+     * @param array  $headers
+     *
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function publishRawWithMiddlewares(
         string $body,
         string $exchange = '',
@@ -227,6 +261,15 @@ class RabbitMqService extends Component
         });
     }
 
+    /**
+     * @param mixed  $payload
+     * @param string $exchange
+     * @param string $routingKey
+     * @param array  $options
+     *
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function publishJson(
         mixed $payload,
         string $exchange = '',
@@ -244,11 +287,33 @@ class RabbitMqService extends Component
         $this->publishEnvelope($env, $exchange, $routingKey);
     }
 
+    /**
+     * @param string $body
+     * @param array  $meta
+     *
+     * @return Envelope
+     * @throws InvalidConfigException
+     */
     public function decodeEnvelope(string $body, array $meta = []): Envelope
     {
-        return $this->getSerializer()->decode($body, $meta);
+        $serializer = $this->getSerializer();
+
+        if ($serializer->canDecode($body, $meta)) {
+            return $serializer->decode($body, $meta);
+        }
+
+        $data = json_decode($body, true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            return new Envelope($data, $meta['headers'] ?? [], $meta['properties'] ?? []);
+        }
+
+        return new Envelope($body, $meta['headers'] ?? [], $meta['properties'] ?? []);
     }
 
+    /**
+     * @return ConnectionInterface
+     * @throws InvalidConfigException
+     */
     public function getConnection(): ConnectionInterface
     {
         if ($this->connection === null) {
@@ -258,6 +323,10 @@ class RabbitMqService extends Component
         return $this->connection;
     }
 
+    /**
+     * @return PublisherInterface
+     * @throws InvalidConfigException
+     */
     public function getPublisher(): PublisherInterface
     {
         if ($this->publisher === null) {
@@ -267,9 +336,18 @@ class RabbitMqService extends Component
         return $this->publisher;
     }
 
+    /**
+     * @param string $queue
+     * @param        $handler
+     * @param array  $options
+     *
+     * @return void
+     * @throws Throwable
+     * @throws InvalidConfigException
+     */
     public function consume(string $queue, $handler, array $options = []): void
     {
-        $options = $this->normalizeConsumeOptions($options);
+        $options  = $this->normalizeConsumeOptions($options);
         $prefetch = $options['prefetch'];
 
         $handlerClass = $this->resolveHandlerClass($handler);
@@ -307,8 +385,8 @@ class RabbitMqService extends Component
             return $this->consumerRegistry;
         }
 
-        $config = $this->getDiscoveryConfigOrThrow();
-        $discovery = new DefinitionsDiscovery($config);
+        $config                 = $this->getDiscoveryConfigOrThrow();
+        $discovery              = new DefinitionsDiscovery($config);
         $this->consumerRegistry = $discovery->discoverConsumers();
 
         return $this->consumerRegistry;
@@ -320,8 +398,8 @@ class RabbitMqService extends Component
             return $this->publisherRegistry;
         }
 
-        $config = $this->getDiscoveryConfigOrThrow();
-        $discovery = new DefinitionsDiscovery($config);
+        $config                  = $this->getDiscoveryConfigOrThrow();
+        $discovery               = new DefinitionsDiscovery($config);
         $this->publisherRegistry = $discovery->discoverPublishers();
 
         return $this->publisherRegistry;
@@ -333,8 +411,8 @@ class RabbitMqService extends Component
             return $this->middlewareRegistry;
         }
 
-        $config = $this->getDiscoveryConfigOrThrow();
-        $discovery = new DefinitionsDiscovery($config);
+        $config                   = $this->getDiscoveryConfigOrThrow();
+        $discovery                = new DefinitionsDiscovery($config);
         $this->middlewareRegistry = $discovery->discoverMiddlewares();
 
         return $this->middlewareRegistry;
@@ -351,32 +429,53 @@ class RabbitMqService extends Component
             throw new InvalidArgumentException('Handler discovery is disabled because no handlers path is configured.');
         }
 
-        $discovery = new DefinitionsDiscovery($config);
+        $discovery             = new DefinitionsDiscovery($config);
         $this->handlerRegistry = $discovery->discoverHandlers();
 
         return $this->handlerRegistry;
     }
 
+    /**
+     * @param string $fqcn
+     *
+     * @return DefinitionConsumerInterface
+     * @throws InvalidConfigException
+     * @throws ReflectionException
+     */
     public function createConsumerDefinition(string $fqcn): DefinitionConsumerInterface
     {
         $instance = Yii::createObject($fqcn);
         if (!$instance instanceof DefinitionConsumerInterface) {
-            throw new InvalidArgumentException("Consumer class '{$fqcn}' must implement definitions ConsumerInterface.");
+            throw new InvalidArgumentException("Consumer class '$fqcn' must implement definitions ConsumerInterface.");
         }
 
         return $this->applyProfileToConsumer($instance);
     }
 
+    /**
+     * @param string $fqcn
+     *
+     * @return DefinitionPublisherInterface
+     * @throws InvalidConfigException
+     * @throws ReflectionException
+     */
     public function createPublisherDefinition(string $fqcn): DefinitionPublisherInterface
     {
         $instance = Yii::createObject($fqcn);
         if (!$instance instanceof DefinitionPublisherInterface) {
-            throw new InvalidArgumentException("Publisher class '{$fqcn}' must implement definitions PublisherInterface.");
+            throw new InvalidArgumentException(
+                "Publisher class '$fqcn' must implement definitions PublisherInterface."
+            );
         }
 
         return $this->applyProfileToPublisher($instance);
     }
 
+    /**
+     * @return RabbitMqProfileInterface|null
+     * @throws InvalidConfigException
+     * @throws ReflectionException
+     */
     public function getProfile(): ?RabbitMqProfileInterface
     {
         if ($this->profileInstance !== null) {
@@ -420,23 +519,23 @@ class RabbitMqService extends Component
         $pipelineChanged = false;
         if (isset($options['consumeFailFast'])) {
             $this->consumeFailFast = (bool)$options['consumeFailFast'];
-            $pipelineChanged = true;
+            $pipelineChanged       = true;
         }
 
         if (isset($options['fatalExceptionClasses']) && is_array($options['fatalExceptionClasses'])) {
             $this->fatalExceptionClasses = $options['fatalExceptionClasses'];
-            $pipelineChanged = true;
+            $pipelineChanged             = true;
         }
 
         if (isset($options['recoverableExceptionClasses']) && is_array($options['recoverableExceptionClasses'])) {
             $this->recoverableExceptionClasses = $options['recoverableExceptionClasses'];
-            $pipelineChanged = true;
+            $pipelineChanged                   = true;
         }
 
         $middlewares = $options['consumeMiddlewares'] ?? $options['middlewares'] ?? null;
         if (is_array($middlewares)) {
             $this->consumeMiddlewares = $middlewares;
-            $pipelineChanged = true;
+            $pipelineChanged          = true;
         }
 
         if ($pipelineChanged) {
@@ -471,6 +570,13 @@ class RabbitMqService extends Component
         return null;
     }
 
+    /**
+     * @param DefinitionConsumerInterface $consumer
+     *
+     * @return DefinitionConsumerInterface
+     * @throws InvalidConfigException
+     * @throws ReflectionException
+     */
     private function applyProfileToConsumer(DefinitionConsumerInterface $consumer): DefinitionConsumerInterface
     {
         $profile = $this->getProfile();
@@ -478,10 +584,10 @@ class RabbitMqService extends Component
             return $consumer;
         }
 
-        $options = $consumer->getOptions();
+        $options     = $consumer->getOptions();
         $middlewares = $consumer->getMiddlewares();
 
-        $mergedOptions = $this->mergeProfileOptions($profile, $profile->getConsumerDefaults(), $options);
+        $mergedOptions     = $this->mergeProfileOptions($profile, $profile->getConsumerDefaults(), $options);
         $mergedMiddlewares = $this->mergeProfileOptions(
             $profile,
             $this->getProfileConsumerMiddlewareDefaults($profile),
@@ -495,6 +601,13 @@ class RabbitMqService extends Component
         return new ProfiledConsumer($consumer, $mergedOptions, $mergedMiddlewares);
     }
 
+    /**
+     * @param DefinitionPublisherInterface $publisher
+     *
+     * @return DefinitionPublisherInterface
+     * @throws InvalidConfigException
+     * @throws ReflectionException
+     */
     private function applyProfileToPublisher(DefinitionPublisherInterface $publisher): DefinitionPublisherInterface
     {
         $profile = $this->getProfile();
@@ -502,10 +615,10 @@ class RabbitMqService extends Component
             return $publisher;
         }
 
-        $options = $publisher->getOptions();
+        $options     = $publisher->getOptions();
         $middlewares = $publisher->getMiddlewares();
 
-        $mergedOptions = $this->mergeProfileOptions($profile, $profile->getPublisherDefaults(), $options);
+        $mergedOptions     = $this->mergeProfileOptions($profile, $profile->getPublisherDefaults(), $options);
         $mergedMiddlewares = $this->mergeProfileOptions(
             $profile,
             $this->getProfilePublisherMiddlewareDefaults($profile),
@@ -572,10 +685,16 @@ class RabbitMqService extends Component
         return is_array($defaults) ? $defaults : [];
     }
 
+    /**
+     * @param callable $factory
+     *
+     * @return object
+     * @throws ReflectionException
+     */
     private function invokeProfileFactory(callable $factory): object
     {
-        $closure = \Closure::fromCallable($factory);
-        $reflection = new \ReflectionFunction($closure);
+        $closure    = $factory(...);
+        $reflection = new ReflectionFunction($closure);
 
         if ($reflection->getNumberOfParameters() > 0) {
             return $closure($this);
@@ -584,6 +703,12 @@ class RabbitMqService extends Component
         return $closure();
     }
 
+    /**
+     * @param float $timeout
+     *
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function tick(float $timeout = 0.0): void
     {
         if ($this->publisher === null && $this->connection === null) {
@@ -596,6 +721,10 @@ class RabbitMqService extends Component
         }
     }
 
+    /**
+     * @return array
+     * @throws InvalidConfigException
+     */
     public function drainReturns(): array
     {
         $publisher = $this->getPublisher();
@@ -611,11 +740,17 @@ class RabbitMqService extends Component
         return [];
     }
 
+    /**
+     * @param array $config
+     *
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function setupTopology(array $config): void
     {
         $topology = (new TopologyBuilder())->buildFromConfig($config);
         $topology->validate();
-        $this->applyTopology($topology, false);
+        $this->applyTopology($topology);
     }
 
     public function buildTopology(): Topology
@@ -623,6 +758,13 @@ class RabbitMqService extends Component
         return (new TopologyBuilder())->buildFromService($this);
     }
 
+    /**
+     * @param Topology $topology
+     * @param bool     $dryRun
+     *
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function applyTopology(Topology $topology, bool $dryRun = false): void
     {
         $connection = $this->ensureConnection();
@@ -658,7 +800,7 @@ class RabbitMqService extends Component
                 $channel->close();
             } elseif (method_exists($connection, 'getAmqpConnection')) {
                 $amqp = $connection->getAmqpConnection();
-                if (is_object($amqp) && method_exists($amqp, 'channel')) {
+                if (method_exists($amqp, 'channel')) {
                     $channel = $amqp->channel();
                     if (is_object($channel) && method_exists($channel, 'close')) {
                         $channel->close();
@@ -667,7 +809,7 @@ class RabbitMqService extends Component
             }
 
             return true;
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->lastError = $this->formatError($e);
 
             return false;
@@ -675,7 +817,7 @@ class RabbitMqService extends Component
             if ($connection instanceof ConnectionInterface) {
                 try {
                     $connection->close();
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                 }
             }
         }
@@ -686,6 +828,10 @@ class RabbitMqService extends Component
         return $this->lastError;
     }
 
+    /**
+     * @return ConnectionInterface
+     * @throws InvalidConfigException
+     */
     private function ensureConnection(): ConnectionInterface
     {
         $connection = $this->getConnection();
@@ -693,7 +839,7 @@ class RabbitMqService extends Component
         if (!$connection->isConnected()) {
             try {
                 $connection->connect();
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 throw new ConnectionException(
                     'Connection failed: ' . $e->getMessage(),
                     ErrorCode::CONNECTION_FAILED,
@@ -706,6 +852,10 @@ class RabbitMqService extends Component
         return $connection;
     }
 
+    /**
+     * @return ConnectionInterface
+     * @throws InvalidConfigException
+     */
     private function createConnection(): ConnectionInterface
     {
         if (is_callable($this->connectionFactory)) {
@@ -728,30 +878,40 @@ class RabbitMqService extends Component
         return new AmqpConnection($config);
     }
 
-    private function formatError(\Throwable $e): string
+    private function formatError(Throwable $e): string
     {
         $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::GENERIC;
 
         return $code . ' ' . get_class($e) . ': ' . $e->getMessage();
     }
 
+    /**
+     * @return MessageSerializerInterface
+     * @throws InvalidConfigException
+     */
     public function getSerializer(): MessageSerializerInterface
     {
         if ($this->serializerInstance !== null) {
             return $this->serializerInstance;
         }
 
-        if ($this->serializer instanceof MessageSerializerInterface) {
-            $this->serializerInstance = $this->serializer;
-
-            return $this->serializerInstance;
+        if (is_string($this->serializer)) {
+            $this->serializer = ['class' => $this->serializer];
         }
 
-        $this->serializerInstance = Yii::createObject($this->serializer);
+        $serializer = Yii::createObject($this->serializer);
 
-        return $this->serializerInstance;
+        if ($serializer instanceof MessageSerializerInterface) {
+            return $this->serializerInstance = $serializer;
+        }
+
+        throw new InvalidConfigException('Serializer must implement MessageSerializerInterface.');
     }
 
+    /**
+     * @return ReturnHandlerInterface|null
+     * @throws InvalidConfigException
+     */
     private function getReturnHandler(): ?ReturnHandlerInterface
     {
         if (!$this->returnHandlerEnabled) {
@@ -762,24 +922,27 @@ class RabbitMqService extends Component
             return $this->returnHandlerInstance;
         }
 
-        if ($this->returnHandler instanceof ReturnHandlerInterface) {
-            $this->returnHandlerInstance = $this->returnHandler;
-            return $this->returnHandlerInstance;
-        }
-
         if ($this->returnHandler === null) {
             return null;
         }
 
-        $instance = Yii::createObject($this->returnHandler);
-        if (!$instance instanceof ReturnHandlerInterface) {
-            throw new InvalidArgumentException('returnHandler must implement ReturnHandlerInterface.');
+        if (is_string($this->returnHandler)) {
+            $this->returnHandler = ['class' => $this->returnHandler];
         }
 
-        $this->returnHandlerInstance = $instance;
-        return $this->returnHandlerInstance;
+        $returnHandler = Yii::createObject($this->returnHandler);
+
+        if ($returnHandler instanceof ReturnHandlerInterface) {
+            return $this->returnHandlerInstance = $returnHandler;
+        }
+
+        throw new InvalidArgumentException('ReturnHandler must implement ReturnHandlerInterface.');
     }
 
+    /**
+     * @return ReturnSinkInterface|null
+     * @throws InvalidConfigException
+     */
     public function getReturnSink(): ?ReturnSinkInterface
     {
         if (!$this->returnSinkEnabled) {
@@ -790,24 +953,27 @@ class RabbitMqService extends Component
             return $this->returnSinkInstance;
         }
 
-        if ($this->returnSink instanceof ReturnSinkInterface) {
-            $this->returnSinkInstance = $this->returnSink;
-            return $this->returnSinkInstance;
-        }
-
         if ($this->returnSink === null) {
             return null;
         }
 
-        $instance = Yii::createObject($this->returnSink);
-        if (!$instance instanceof ReturnSinkInterface) {
-            throw new InvalidArgumentException('returnSink must implement ReturnSinkInterface.');
+        if (is_string($this->returnSink)) {
+            $this->returnSink = ['class' => $this->returnSink];
         }
 
-        $this->returnSinkInstance = $instance;
-        return $this->returnSinkInstance;
+        $returnSink = Yii::createObject($this->returnSink);
+
+        if ($returnSink instanceof ReturnSinkInterface) {
+            return $this->returnSinkInstance = $returnSink;
+        }
+
+        throw new InvalidArgumentException('ReturnSink must implement ReturnSinkInterface.');
     }
 
+    /**
+     * @return PublishPipeline
+     * @throws InvalidConfigException
+     */
     private function getPublishPipeline(): PublishPipeline
     {
         if ($this->publishPipeline !== null) {
@@ -821,6 +987,10 @@ class RabbitMqService extends Component
         return $this->publishPipeline;
     }
 
+    /**
+     * @return ConsumePipeline
+     * @throws InvalidConfigException
+     */
     private function getConsumePipeline(): ConsumePipeline
     {
         if ($this->consumePipeline !== null) {
@@ -839,6 +1009,13 @@ class RabbitMqService extends Component
         return $this->consumePipeline;
     }
 
+    /**
+     * @param array  $configs
+     * @param string $interface
+     *
+     * @return array
+     * @throws InvalidConfigException
+     */
     private function resolveMiddlewares(array $configs, string $interface): array
     {
         $middlewares = [];
@@ -883,26 +1060,30 @@ class RabbitMqService extends Component
         ];
     }
 
+    /**
+     * @return array
+     * @throws InvalidConfigException
+     */
     private function getConnectionConfig(): array
     {
         $base = [
-            'host'              => $this->host,
-            'port'              => $this->port,
-            'user'              => $this->user,
-            'password'          => $this->password,
-            'vhost'             => $this->vhost,
-            'heartbeat'         => $this->heartbeat,
-            'readWriteTimeout'  => $this->readWriteTimeout,
-            'connectionTimeout' => $this->connectionTimeout,
-            'ssl'               => $this->ssl,
-            'confirm'           => $this->confirm,
-            'mandatory'         => $this->mandatory,
-            'mandatoryStrict'   => $this->mandatoryStrict,
-            'publishTimeout'    => $this->publishTimeout,
-            'returnHandler'     => $this->getReturnHandler(),
+            'host'                 => $this->host,
+            'port'                 => $this->port,
+            'user'                 => $this->user,
+            'password'             => $this->password,
+            'vhost'                => $this->vhost,
+            'heartbeat'            => $this->heartbeat,
+            'readWriteTimeout'     => $this->readWriteTimeout,
+            'connectionTimeout'    => $this->connectionTimeout,
+            'ssl'                  => $this->ssl,
+            'confirm'              => $this->confirm,
+            'mandatory'            => $this->mandatory,
+            'mandatoryStrict'      => $this->mandatoryStrict,
+            'publishTimeout'       => $this->publishTimeout,
+            'returnHandler'        => $this->getReturnHandler(),
             'returnHandlerEnabled' => $this->returnHandlerEnabled,
-            'returnSink'        => $this->getReturnSink(),
-            'returnSinkEnabled' => $this->returnSinkEnabled,
+            'returnSink'           => $this->getReturnSink(),
+            'returnSinkEnabled'    => $this->returnSinkEnabled,
         ];
 
         if (empty($this->profiles)) {
@@ -934,19 +1115,19 @@ class RabbitMqService extends Component
 
     public function __clone()
     {
-        $this->connection         = null;
-        $this->publisher          = null;
-        $this->serializerInstance = null;
-        $this->publishPipeline    = null;
-        $this->consumePipeline    = null;
+        $this->connection            = null;
+        $this->publisher             = null;
+        $this->serializerInstance    = null;
+        $this->publishPipeline       = null;
+        $this->consumePipeline       = null;
         $this->returnHandlerInstance = null;
-        $this->returnSinkInstance = null;
-        $this->lastError          = null;
-        $this->consumerRegistry   = null;
-        $this->publisherRegistry  = null;
-        $this->middlewareRegistry = null;
-        $this->handlerRegistry    = null;
-        $this->profileInstance    = null;
+        $this->returnSinkInstance    = null;
+        $this->lastError             = null;
+        $this->consumerRegistry      = null;
+        $this->publisherRegistry     = null;
+        $this->middlewareRegistry    = null;
+        $this->handlerRegistry       = null;
+        $this->profileInstance       = null;
     }
 
     private function getDiscoveryConfigOrThrow(): DiscoveryConfig
