@@ -232,9 +232,66 @@ class ConfigValidator
 
     private function validateConsumeOptions(array $config): void
     {
+        $this->validateBooleanOption($config, 'managedRetry', 'managedRetry', ErrorCode::CONFIG_INVALID);
+        if (isset($config['retryPolicy']) && !is_array($config['retryPolicy'])) {
+            throw new RabbitMqException('retryPolicy must be an array.', ErrorCode::CONFIG_INVALID);
+        }
+
+        if (($config['managedRetry'] ?? false) === true) {
+            $this->validateRetryPolicy($config['retryPolicy'] ?? [], 'retryPolicy');
+        }
+
         $this->validateBooleanOption($config, 'consumeFailFast', 'consumeFailFast', ErrorCode::CONFIG_INVALID);
         $this->validateClassList($config, 'fatalExceptionClasses', 'fatalExceptionClasses');
         $this->validateClassList($config, 'recoverableExceptionClasses', 'recoverableExceptionClasses');
+    }
+
+    private function validateRetryPolicy(array $policy, string $path): void
+    {
+        if (!isset($policy['maxAttempts']) || !is_int($policy['maxAttempts']) || $policy['maxAttempts'] <= 0) {
+            throw new RabbitMqException($path . '.maxAttempts must be a positive integer.', ErrorCode::CONFIG_INVALID);
+        }
+
+        if (isset($policy['exhaustedAction'])
+            && !in_array($policy['exhaustedAction'], ['reject', 'stop'], true)
+        ) {
+            throw new RabbitMqException($path . '.exhaustedAction must be reject or stop.', ErrorCode::CONFIG_INVALID);
+        }
+
+        if (isset($policy['retryExchange'])
+            && (!is_string($policy['retryExchange']) || $policy['retryExchange'] === '')
+        ) {
+            throw new RabbitMqException($path . '.retryExchange must be a non-empty string.', ErrorCode::CONFIG_INVALID);
+        }
+
+        if (!isset($policy['retryQueues'])) {
+            return;
+        }
+
+        if (!is_array($policy['retryQueues'])) {
+            throw new RabbitMqException($path . '.retryQueues must be an array.', ErrorCode::CONFIG_INVALID);
+        }
+
+        foreach ($policy['retryQueues'] as $index => $queue) {
+            if (!is_array($queue)) {
+                throw new RabbitMqException(
+                    $path . '.retryQueues[' . $index . '] must be an array.',
+                    ErrorCode::CONFIG_INVALID
+                );
+            }
+            if (!isset($queue['name']) || !is_string($queue['name']) || $queue['name'] === '') {
+                throw new RabbitMqException(
+                    $path . '.retryQueues[' . $index . '].name must be a non-empty string.',
+                    ErrorCode::CONFIG_INVALID
+                );
+            }
+            if (!isset($queue['ttlMs']) || !is_int($queue['ttlMs']) || $queue['ttlMs'] <= 0) {
+                throw new RabbitMqException(
+                    $path . '.retryQueues[' . $index . '].ttlMs must be a positive integer.',
+                    ErrorCode::CONFIG_INVALID
+                );
+            }
+        }
     }
 
     private function validateReturnHandler(array $config): void

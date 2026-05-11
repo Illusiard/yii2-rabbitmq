@@ -76,4 +76,27 @@ class ConfigValidatorTest extends TestCase
             ],
         ]);
     }
+
+    public function testManagedRetryRequiresValidRetryPolicy(): void
+    {
+        $validator = new ConfigValidator();
+
+        $this->expectException(RabbitMqException::class);
+        $this->expectExceptionMessage('retryPolicy.maxAttempts must be a positive integer.');
+
+        $validator->validate([
+            'amqp' => [
+                'host' => '127.0.0.1',
+                'port' => 5672,
+                'user' => 'guest',
+                'password' => 'guest',
+            ],
+            'managedRetry' => true,
+            'retryPolicy' => [
+                'retryQueues' => [
+                    ['name' => 'orders.retry.1', 'ttlMs' => 5000],
+                ],
+            ],
+        ]);
+    }
 }

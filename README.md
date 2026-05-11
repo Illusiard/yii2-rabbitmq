@@ -85,7 +85,8 @@ $rabbit->publish('Hello', 'exchange', 'route.key', [
   - Пакет не выставляет `delivery_mode` автоматически — задавайте его в `properties` при публикации.
 - Retry semantics:
   - Managed retry использует заголовок `x-retry-count`; `x-death` не является источником истины.
-  - `x-retry-count` увеличивается при republish в retry-очередь.
+  - `x-retry-count` увеличивается при republish и ограничивается `maxAttempts`.
+  - `retryExchange` на runtime берётся из `topology.options.retryExchange`; значение из retry policy используется только как fallback.
   - Сообщение уходит в dead при `dead` решении, иначе `reject` приводит к `basic_reject(false)`.
 - DLQ inspect semantics:
   - `dlq-inspect` по умолчанию НЕ удаляет сообщения (`basic.get` + `nack requeue=true`).
@@ -234,6 +235,11 @@ class OrdersConsumer implements ConsumerInterface
 
 ID берется из имени класса: `OrdersConsumer` -> `orders`, `AuditLogConsumer` -> `audit-log`.
 
+Component-level consume config (`managedRetry`, `retryPolicy`, `consumeMiddlewares`, `consumeFailFast`,
+`fatalExceptionClasses`, `recoverableExceptionClasses`) является публичным runtime API. Эти значения
+сливаются поверх profile defaults и consumer options, поэтому применяются и в CLI, и при прямом запуске
+`ConsumeRunner`.
+
 ## CLI
 
 Команды:
@@ -350,8 +356,8 @@ CLI:
   - `false` → RETRY (дальше применяется retry policy)
 - Exception classification:
   - `consumeFailFast=true` превращает fatal исключения в `ConsumeResult::stop()` и завершает consumer.
-  - Recoverable исключения приводят к `ConsumeResult::retry()`.
-- Managed retry публикует retry-сообщения через configured `retryExchange`, использует `x-retry-count` и не опирается на `x-death`.
+  - Recoverable исключения приводят к `ConsumeResult::retry()` и проходят через retry policy.
+- Managed retry публикует retry-сообщения через `topology.options.retryExchange`, использует `x-retry-count` и не опирается на `x-death`.
 
 ## Publish semantics
 
@@ -395,9 +401,13 @@ $returns = $rabbit->drainReturns();
 
 Если `managedRetry=true`, то при `handler=false` или `ConsumeResult::retry()` применяется retry policy и:
 
-- retry — перепубликация в retry-очередь через configured `retryExchange`, затем ACK
+- retry — перепубликация в retry-очередь через `topology.options.retryExchange` или fallback `retryPolicy.retryExchange`, затем ACK
 - dead — перепубликация в dead-очередь (если указана), затем ACK
 - reject — `basic_reject(false)`
+
+`maxAttempts` обязателен и должен быть положительным integer. Каждая `retryQueues[]` запись требует
+`name` и `ttlMs`. При исчерпании попыток `x-retry-count` записывается как
+`min(currentAttempt + 1, maxAttempts)`.
 
 Пример политики:
 
@@ -413,6 +423,9 @@ $returns = $rabbit->drainReturns();
     'deadQueue' => 'orders.dead',
 ],
 ```
+
+Если в topology задан `options.retryExchange`, runtime retry всегда публикует туда, даже если
+`retryPolicy.retryExchange` отличается.
 
 ## Ready protocol
 

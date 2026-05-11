@@ -19,7 +19,9 @@ use illusiard\rabbitmq\definitions\middleware\MiddlewareInterface;
 use illusiard\rabbitmq\helpers\FileHelper;
 use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
+use illusiard\rabbitmq\profile\OptionsMerger;
 use InvalidArgumentException;
+use ReflectionException;
 use Throwable;
 use Yii;
 use yii\base\InvalidConfigException;
@@ -34,6 +36,14 @@ class ConsumeRunner
         $this->service = $service;
     }
 
+    /**
+     * @param string $queue
+     * @param $handler
+     * @param array $options
+     * @param ?RunnerOptions $runnerOptions
+     * @return int
+     * @throws InvalidConfigException
+     */
     public function run(string $queue, $handler, array $options = [], ?RunnerOptions $runnerOptions = null): int
     {
         $runnerOptions = $runnerOptions ?? new RunnerOptions();
@@ -64,6 +74,8 @@ class ConsumeRunner
             $consumer->consume($queue, $pipelineHandler, $prefetch);
 
             return 0;
+        } catch (InvalidConfigException $e) {
+            throw $e;
         } catch (Throwable $e) {
             Yii::error('Consume runner failed: exception=' . get_class($e), 'rabbitmq');
             return 1;
@@ -147,25 +159,33 @@ class ConsumeRunner
      * @param array $options
      * @return callable
      * @throws InvalidConfigException
+     * @throws ReflectionException
      */
     private function buildPipelineHandler(string $queue, $handler, array $options): callable
     {
         $consumer = $this->resolveConsumer($queue, $handler, $options);
+        $options = $this->service->mergeConsumeOptions(OptionsMerger::merge($consumer->getOptions(), $options));
         $resolvedHandler = $this->resolveHandler($handler);
         $handlerClass = $this->resolveHandlerClass($resolvedHandler, $handler);
         $userMiddlewares = $this->resolveMiddlewares($consumer, $options, $handlerClass);
 
         $classifier = $this->buildExceptionClassifier($options);
         $retryPolicy = new ManagedRetryPolicy($this->service, $options);
+        $retryPolicy->validate();
 
+        $retryMiddleware = new RetryPolicyMiddleware($retryPolicy);
         $pipeline = array_merge(
             [
-                new ExceptionHandlingMiddleware($classifier),
+                new ExceptionHandlingMiddleware(
+                    $classifier,
+                    static fn(ConsumeResult $result, ConsumeContext $context): ConsumeResult => $retryMiddleware->process(
+                        $context,
+                        static fn(): ConsumeResult => $result
+                    )
+                ),
+                $retryMiddleware,
             ],
             $userMiddlewares,
-            [
-                new RetryPolicyMiddleware($retryPolicy),
-            ]
         );
 
         $core = static function (ConsumeContext $context) use ($resolvedHandler) {
@@ -185,14 +205,14 @@ class ConsumeRunner
             $core
         );
 
-        return function (string $body, array $meta) use ($runner, $consumer, $classifier, $retryPolicy): ConsumeResult {
+        return function (string $body, array $meta) use ($runner, $consumer, $classifier, $retryMiddleware): ConsumeResult {
             try {
                 $context = $this->buildContext($body, $meta, $consumer);
             } catch (Throwable $e) {
                 $context = $this->buildFallbackContext($body, $meta, $consumer);
                 $result = $classifier->classify($e, $context);
 
-                return $this->finalizeResult($retryPolicy->apply($result, $context));
+                return $this->finalizeResult($retryMiddleware->process($context, static fn(): ConsumeResult => $result));
             }
 
             return $this->finalizeResult($runner($context));

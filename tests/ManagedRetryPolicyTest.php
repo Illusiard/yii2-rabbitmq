@@ -2,7 +2,6 @@
 
 namespace illusiard\rabbitmq\tests;
 
-use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\consume\ManagedRetryPolicy;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
@@ -85,7 +84,7 @@ class ManagedRetryPolicyTest extends TestCase
         $this->assertSame(ConsumeResult::ACTION_ACK, $result->getAction());
         $this->assertSame('', $service->published[0]['exchange']);
         $this->assertSame('dead', $service->published[0]['routingKey']);
-        $this->assertSame(2, $service->published[0]['headers']['x-retry-count']);
+        $this->assertSame(1, $service->published[0]['headers']['x-retry-count']);
     }
 
     /**
@@ -137,7 +136,7 @@ class ManagedRetryPolicyTest extends TestCase
         $this->assertSame(ConsumeResult::ACTION_ACK, $result->getAction());
         $this->assertSame('', $service->published[0]['exchange']);
         $this->assertSame('dead', $service->published[0]['routingKey']);
-        $this->assertSame(4, $service->published[0]['headers']['x-retry-count']);
+        $this->assertSame(3, $service->published[0]['headers']['x-retry-count']);
     }
 
     /**
@@ -156,8 +155,42 @@ class ManagedRetryPolicyTest extends TestCase
             ],
         ]);
 
-        $this->expectException(InvalidArgumentException::class);
+        $this->expectException(InvalidConfigException::class);
         $policy->apply(ConsumeResult::retry(), $this->context($service, []));
+    }
+
+    public function testEnabledPolicyRequiresIntegerMaxAttempts(): void
+    {
+        $service = new FakeRetryService();
+        $policy = new ManagedRetryPolicy($service, [
+            'managedRetry' => [
+                'enabled' => true,
+                'maxAttempts' => '3',
+                'retryQueues' => [
+                    ['name' => 'retry_1', 'ttlMs' => 5000],
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidConfigException::class);
+        $policy->validate();
+    }
+
+    public function testRetryQueuesRequireNameAndTtl(): void
+    {
+        $service = new FakeRetryService();
+        $policy = new ManagedRetryPolicy($service, [
+            'managedRetry' => [
+                'enabled' => true,
+                'maxAttempts' => 3,
+                'retryQueues' => [
+                    ['name' => 'retry_1'],
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidConfigException::class);
+        $policy->validate();
     }
 
     /**
@@ -225,6 +258,36 @@ class ManagedRetryPolicyTest extends TestCase
         $this->assertArrayNotHasKey('expiration', $service->published[0]['properties']);
         $this->assertArrayNotHasKey('reply_to', $service->published[0]['properties']);
         $this->assertSame('msg-1', $service->published[0]['properties']['message_id']);
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testTopologyRetryExchangeOverridesRuntimePolicy(): void
+    {
+        $service = new FakeRetryService([
+            'topology' => [
+                'options' => [
+                    'retryExchange' => 'topology-retry-ex',
+                ],
+            ],
+        ]);
+        $policy = new ManagedRetryPolicy($service, [
+            'managedRetry' => [
+                'enabled' => true,
+                'maxAttempts' => 3,
+                'retryExchange' => 'runtime-retry-ex',
+                'retryQueues' => [
+                    ['name' => 'retry_1', 'ttlMs' => 5000],
+                ],
+            ],
+        ]);
+
+        $result = $policy->apply(ConsumeResult::retry(), $this->context($service, []));
+
+        $this->assertSame(ConsumeResult::ACTION_ACK, $result->getAction());
+        $this->assertSame('topology-retry-ex', $service->published[0]['exchange']);
     }
 
     private function context(FakeRetryService $service, array $headers): ConsumeContext

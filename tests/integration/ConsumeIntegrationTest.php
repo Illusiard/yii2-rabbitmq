@@ -15,6 +15,7 @@ use illusiard\rabbitmq\definitions\consume\MessageMeta;
 use illusiard\rabbitmq\definitions\consumer\RuntimeConsumer;
 use RuntimeException;
 use Throwable;
+use yii\base\InvalidConfigException;
 
 /**
  * @group integration
@@ -122,14 +123,28 @@ class ConsumeIntegrationTest extends IntegrationTestCase
         $this->assertTrue($this->waitForQueueCount($queue, 0));
     }
 
+    /**
+     * @param string $queue
+     * @param callable $handler
+     * @param array $options
+     * @return callable
+     * @throws InvalidConfigException
+     */
     private function buildPipelineHandler(string $queue, callable $handler, array $options): callable
     {
         $consumerDef = new RuntimeConsumer($queue, $handler, $options);
 
         $classifier = new DefaultExceptionClassifier((bool)($options['consumeFailFast'] ?? true));
         $retryPolicy = new ManagedRetryPolicy($this->service, $options);
-        $exceptionMiddleware = new ExceptionHandlingMiddleware($classifier);
+        $retryPolicy->validate();
         $retryMiddleware = new RetryPolicyMiddleware($retryPolicy);
+        $exceptionMiddleware = new ExceptionHandlingMiddleware(
+            $classifier,
+            static fn(ConsumeResult $result, ConsumeContext $context): ConsumeResult => $retryMiddleware->process(
+                $context,
+                static fn(): ConsumeResult => $result
+            )
+        );
 
         $core = static function (ConsumeContext $context) use ($handler): ConsumeResult {
             $meta = $context->getMeta();

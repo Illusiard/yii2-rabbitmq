@@ -33,6 +33,11 @@
 ### Fixed
 - Семантика publish (confirm/mandatory) и обработка unroutable.
 - Ошибка JSON decode больше не добавляет исходное тело сообщения в exception message.
+- Recoverable exceptions больше не обходят managed retry: `ExceptionHandlingMiddleware` передаёт retry result в `RetryPolicyMiddleware`.
+- Component-level consume config (`managedRetry`, `retryPolicy`, `consumeMiddlewares`, `consumeFailFast`, exception class lists) применяется в consumer flow.
+- Runtime retryExchange синхронизирован с topology: `topology.options.retryExchange` является источником истины.
+- `x-retry-count` при exhausted retry больше не превышает `maxAttempts`.
+- RetryPolicy теперь строго валидирует `maxAttempts` и `retryQueues[]` до запуска consumer.
 
 ### Removed
 - Legacy consumer discovery API с `queue()/handler()/options()`.

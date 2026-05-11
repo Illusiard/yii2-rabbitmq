@@ -13,6 +13,7 @@ use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\definitions\consume\MessageMeta;
 use illusiard\rabbitmq\definitions\consumer\RuntimeConsumer;
 use Throwable;
+use yii\base\InvalidConfigException;
 
 /**
  * @group integration
@@ -29,18 +30,28 @@ class RetryIntegrationTest extends IntegrationTestCase
         $retry1 = $this->uniqueName('orders_retry_5s');
         $retry2 = $this->uniqueName('orders_retry_30s');
         $dead = $this->uniqueName('orders_dead');
+        $retryExchange = $this->uniqueName('retry_ex');
 
+        $this->declareExchange($retryExchange);
         $this->declareQueue($main);
         $this->declareQueue($retry1);
         $this->declareQueue($retry2);
         $this->declareQueue($dead);
+        $this->bindQueue($retry1, $retryExchange, $retry1);
+        $this->bindQueue($retry2, $retryExchange, $retry2);
+        $this->service->topology = [
+            'options' => [
+                'retryExchange' => $retryExchange,
+            ],
+        ];
 
-        $this->publishRaw('payload', '', $main);
+        $this->publishRaw('"payload"', '', $main);
 
         $options = [
             'managedRetry' => [
                 'enabled' => true,
                 'maxAttempts' => 3,
+                'retryExchange' => $this->uniqueName('wrong_retry_ex'),
                 'retryQueues' => [
                     ['name' => $retry1, 'ttlMs' => 5000],
                     ['name' => $retry2, 'ttlMs' => 30000],
@@ -77,6 +88,7 @@ class RetryIntegrationTest extends IntegrationTestCase
         }
 
         $this->assertSame(1, $headers['x-retry-count'] ?? null);
+        $this->assertTrue($this->waitForQueueCount($retry2, 0));
     }
 
     /**
@@ -86,19 +98,30 @@ class RetryIntegrationTest extends IntegrationTestCase
     public function testAMQP_RETRY_02_deadDecision(): void
     {
         $main = $this->uniqueName('orders');
+        $retry = $this->uniqueName('orders_retry_unused');
         $dead = $this->uniqueName('orders_dead');
+        $retryExchange = $this->uniqueName('retry_ex');
 
+        $this->declareExchange($retryExchange);
         $this->declareQueue($main);
+        $this->declareQueue($retry);
         $this->declareQueue($dead);
+        $this->bindQueue($retry, $retryExchange, $retry);
+        $this->service->topology = [
+            'options' => [
+                'retryExchange' => $retryExchange,
+            ],
+        ];
 
-        $this->publishRaw('payload', '', $main, [], ['x-retry-count' => 1]);
+        $this->publishRaw('"payload"', '', $main, [], ['x-retry-count' => 1]);
 
         $options = [
             'managedRetry' => [
                 'enabled' => true,
                 'maxAttempts' => 1,
+                'retryExchange' => $this->uniqueName('wrong_retry_ex'),
                 'retryQueues' => [
-                    ['name' => $this->uniqueName('retry_unused'), 'ttlMs' => 5000],
+                    ['name' => $retry, 'ttlMs' => 5000],
                 ],
                 'deadQueue' => $dead,
             ],
@@ -130,16 +153,31 @@ class RetryIntegrationTest extends IntegrationTestCase
         }
 
         $this->assertSame(1, $headers['x-retry-count'] ?? null);
+        $this->assertTrue($this->waitForQueueCount($retry, 0));
     }
 
+    /**
+     * @param string $queue
+     * @param callable $handler
+     * @param array $options
+     * @return callable
+     * @throws InvalidConfigException
+     */
     private function buildPipelineHandler(string $queue, callable $handler, array $options): callable
     {
         $consumerDef = new RuntimeConsumer($queue, $handler, $options);
 
         $classifier = new DefaultExceptionClassifier(true);
         $retryPolicy = new ManagedRetryPolicy($this->service, $options);
-        $exceptionMiddleware = new ExceptionHandlingMiddleware($classifier);
+        $retryPolicy->validate();
         $retryMiddleware = new RetryPolicyMiddleware($retryPolicy);
+        $exceptionMiddleware = new ExceptionHandlingMiddleware(
+            $classifier,
+            static fn(ConsumeResult $result, ConsumeContext $context): ConsumeResult => $retryMiddleware->process(
+                $context,
+                static fn(): ConsumeResult => $result
+            )
+        );
 
         $core = static function (ConsumeContext $context) use ($handler): ConsumeResult {
             $meta = $context->getMeta();

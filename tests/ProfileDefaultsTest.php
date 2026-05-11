@@ -41,4 +41,43 @@ class ProfileDefaultsTest extends TestCase
         ], $publisher->getOptions());
         $this->assertSame(['base-publish', 'publish-extra'], $publisher->getMiddlewares());
     }
+
+    /**
+     * @return void
+     * @throws ReflectionException
+     * @throws InvalidConfigException
+     */
+    public function testComponentConsumeOptionsOverrideProfileAndConsumerDefaults(): void
+    {
+        $service = new RabbitMqService([
+            'profile' => new TestProfile(),
+            'managedRetry' => true,
+            'retryPolicy' => [
+                'maxAttempts' => 4,
+                'retryQueues' => [
+                    ['name' => 'component.retry.1', 'ttlMs' => 5000],
+                ],
+                'deadQueue' => 'component.dead',
+            ],
+            'consumeFailFast' => false,
+            'consumeMiddlewares' => ['component-consume'],
+        ]);
+
+        $consumer = $service->createConsumerDefinition(TestConsumerDefinition::class);
+
+        $this->assertSame([
+            'prefetch' => 1,
+            'retryPolicy' => [
+                'delaySeconds' => 10,
+                'maxAttempts' => 4,
+                'retryQueues' => [
+                    ['name' => 'component.retry.1', 'ttlMs' => 5000],
+                ],
+                'deadQueue' => 'component.dead',
+            ],
+            'managedRetry' => true,
+            'consumeFailFast' => false,
+        ], $consumer->getOptions());
+        $this->assertSame(['base-consume', 'consume-extra', 'component-consume'], $consumer->getMiddlewares());
+    }
 }

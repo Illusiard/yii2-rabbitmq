@@ -53,6 +53,15 @@ use yii\base\InvalidConfigException;
  */
 class RabbitMqService extends Component
 {
+    private const DEFAULT_RETRY_EXCHANGE = 'retry-exchange';
+    private const COMPONENT_CONSUME_OPTION_DEFAULTS = [
+        'managedRetry' => false,
+        'retryPolicy' => [],
+        'consumeFailFast' => true,
+        'fatalExceptionClasses' => [],
+        'recoverableExceptionClasses' => [],
+    ];
+
     public string       $host                        = '127.0.0.1';
     public int          $port                        = 5672;
     public string       $user                        = 'guest';
@@ -101,6 +110,18 @@ class RabbitMqService extends Component
     private ?DefinitionMiddlewareRegistry $middlewareRegistry    = null;
     private ?DefinitionHandlerRegistry    $handlerRegistry       = null;
     private ?RabbitMqProfileInterface     $profileInstance       = null;
+    private array                         $configuredConsumeKeys;
+
+    public function __construct($config = [])
+    {
+        $consumeKeys = array_merge(array_keys(self::COMPONENT_CONSUME_OPTION_DEFAULTS), ['consumeMiddlewares']);
+        $this->configuredConsumeKeys = array_fill_keys(
+            array_values(array_intersect(array_keys($config), $consumeKeys)),
+            true
+        );
+
+        parent::__construct($config);
+    }
 
     public function init(): void
     {
@@ -126,6 +147,8 @@ class RabbitMqService extends Component
                 'topology'                    => $this->topology,
                 'publishMiddlewares'          => $this->publishMiddlewares,
                 'consumeMiddlewares'          => $this->consumeMiddlewares,
+                'managedRetry'                => $this->managedRetry,
+                'retryPolicy'                 => $this->retryPolicy,
                 'consumeFailFast'             => $this->consumeFailFast,
                 'fatalExceptionClasses'       => $this->fatalExceptionClasses,
                 'recoverableExceptionClasses' => $this->recoverableExceptionClasses,
@@ -342,6 +365,56 @@ class RabbitMqService extends Component
         return new ConsumeRunner($this);
     }
 
+    /**
+     * @param array $options
+     * @return array
+     * @throws InvalidConfigException
+     * @throws ReflectionException
+     */
+    public function mergeConsumeOptions(array $options): array
+    {
+        $profile = $this->getProfile();
+        $merged = $options;
+
+        if ($profile !== null) {
+            $merged = $this->mergeProfileOptions($profile, $profile->getConsumerDefaults(), $merged);
+        }
+
+        $componentOptions = $this->getComponentConsumeOptions();
+        if ($componentOptions !== []) {
+            $merged = OptionsMerger::merge($merged, $componentOptions);
+        }
+
+        $componentMiddlewares = $this->getComponentConsumeMiddlewares();
+        if ($componentMiddlewares !== []) {
+            $middlewares = $merged['consumeMiddlewares'] ?? $merged['middlewares'] ?? [];
+            if (!is_array($middlewares)) {
+                $middlewares = [];
+            }
+            $merged['consumeMiddlewares'] = OptionsMerger::merge($middlewares, $componentMiddlewares);
+        }
+
+        return $merged;
+    }
+
+    public function resolveRetryExchange(?string $fallback = null): string
+    {
+        $options = $this->topology['options'] ?? [];
+        if (is_array($options)
+            && isset($options['retryExchange'])
+            && is_string($options['retryExchange'])
+            && $options['retryExchange'] !== ''
+        ) {
+            return $options['retryExchange'];
+        }
+
+        if ($fallback !== null && $fallback !== '') {
+            return $fallback;
+        }
+
+        return self::DEFAULT_RETRY_EXCHANGE;
+    }
+
     public function getConsumerRegistry(): DefinitionConsumerRegistry
     {
         if ($this->consumerRegistry !== null) {
@@ -477,25 +550,33 @@ class RabbitMqService extends Component
     private function applyProfileToConsumer(DefinitionConsumerInterface $consumer): DefinitionConsumerInterface
     {
         $profile = $this->getProfile();
-        if ($profile === null) {
-            return $consumer;
-        }
-
         $options     = $consumer->getOptions();
         $middlewares = $consumer->getMiddlewares();
 
-        $mergedOptions     = $this->mergeProfileOptions($profile, $profile->getConsumerDefaults(), $options);
-        $mergedMiddlewares = $this->mergeProfileOptions(
-            $profile,
-            $this->getProfileConsumerMiddlewareDefaults($profile),
-            $middlewares
-        );
+        if ($profile !== null) {
+            $options = $this->mergeProfileOptions($profile, $profile->getConsumerDefaults(), $options);
+            $middlewares = $this->mergeProfileOptions(
+                $profile,
+                $this->getProfileConsumerMiddlewareDefaults($profile),
+                $middlewares
+            );
+        }
 
-        if ($options === $mergedOptions && $middlewares === $mergedMiddlewares) {
+        $componentOptions = $this->getComponentConsumeOptions();
+        if ($componentOptions !== []) {
+            $options = OptionsMerger::merge($options, $componentOptions);
+        }
+
+        $componentMiddlewares = $this->getComponentConsumeMiddlewares();
+        if ($componentMiddlewares !== []) {
+            $middlewares = OptionsMerger::merge($middlewares, $componentMiddlewares);
+        }
+
+        if ($consumer->getOptions() === $options && $consumer->getMiddlewares() === $middlewares) {
             return $consumer;
         }
 
-        return new ProfiledConsumer($consumer, $mergedOptions, $mergedMiddlewares);
+        return new ProfiledConsumer($consumer, $options, $middlewares);
     }
 
     /**
@@ -539,6 +620,29 @@ class RabbitMqService extends Component
         }
 
         return OptionsMerger::merge($defaults, $overrides);
+    }
+
+    private function getComponentConsumeOptions(): array
+    {
+        $options = [];
+
+        foreach (self::COMPONENT_CONSUME_OPTION_DEFAULTS as $key => $default) {
+            $value = $this->{$key};
+            if (isset($this->configuredConsumeKeys[$key]) || $value !== $default) {
+                $options[$key] = $value;
+            }
+        }
+
+        return $options;
+    }
+
+    private function getComponentConsumeMiddlewares(): array
+    {
+        if (!isset($this->configuredConsumeKeys['consumeMiddlewares']) && $this->consumeMiddlewares === []) {
+            return [];
+        }
+
+        return $this->consumeMiddlewares;
     }
 
     private function getProfileConsumerMiddlewareDefaults(RabbitMqProfileInterface $profile): array

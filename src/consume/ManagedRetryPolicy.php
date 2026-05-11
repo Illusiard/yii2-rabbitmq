@@ -6,7 +6,6 @@ use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\retry\RetryHeader;
-use InvalidArgumentException;
 use yii\base\InvalidConfigException;
 
 class ManagedRetryPolicy implements RetryPolicyInterface
@@ -42,35 +41,47 @@ class ManagedRetryPolicy implements RetryPolicyInterface
         $retryQueues = $policy['retryQueues'];
         $deadQueue = $policy['deadQueue'];
         $attempts = $this->resolveRetryCount($meta->getHeaders(), $maxAttempts);
+        $nextAttempt = $this->nextAttempt($attempts, $maxAttempts);
 
         if (empty($retryQueues)) {
-            return $this->exhaust($context, $deadQueue, $policy['exhaustedAction'], $attempts + 1);
+            return $this->exhaust($context, $deadQueue, $policy['exhaustedAction'], $nextAttempt);
         }
 
         if ($maxAttempts > 0 && $attempts >= $maxAttempts) {
-            return $this->exhaust($context, $deadQueue, $policy['exhaustedAction'], $attempts + 1);
+            return $this->exhaust($context, $deadQueue, $policy['exhaustedAction'], $nextAttempt);
         }
 
         if ($attempts < count($retryQueues)) {
             $next = $retryQueues[$attempts] ?? null;
-            if (is_array($next) && isset($next['name']) && is_string($next['name']) && $next['name'] !== '') {
-                return $this->publishToQueue($context, $policy['retryExchange'], $next['name'], $attempts + 1);
-            }
+            return $this->publishToQueue($context, $policy['retryExchange'], $next['name'], $nextAttempt);
         }
 
-        return $this->exhaust($context, $deadQueue, $policy['exhaustedAction'], $attempts + 1);
+        return $this->exhaust($context, $deadQueue, $policy['exhaustedAction'], $nextAttempt);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function validate(): void
+    {
+        $this->normalizePolicy();
+    }
+
+    /**
+     * @return array
+     * @throws InvalidConfigException
+     */
     private function normalizePolicy(): array
     {
         $managed = $this->options['managedRetry'] ?? null;
         $policy = [
             'enabled' => false,
-            'maxAttempts' => 0,
+            'maxAttempts' => null,
             'retryQueues' => [],
             'deadQueue' => null,
             'exhaustedAction' => 'reject',
-            'retryExchange' => 'retry-exchange',
+            'retryExchange' => null,
             'deadExchange' => '',
         ];
 
@@ -83,11 +94,16 @@ class ManagedRetryPolicy implements RetryPolicyInterface
         if (is_bool($managed)) {
             $policy['enabled'] = $managed;
             $retryPolicy = $this->options['retryPolicy'] ?? [];
-            if (is_array($retryPolicy)) {
-                $policy = array_merge($policy, $this->extractPolicy($retryPolicy));
+            if (!is_array($retryPolicy)) {
+                throw new InvalidConfigException('retry policy must be an array.');
             }
+            $policy = array_merge($policy, $this->extractPolicy($retryPolicy));
 
             return $this->finalizePolicy($policy);
+        }
+
+        if ($managed !== null) {
+            throw new InvalidConfigException('managedRetry must be a boolean or an array.');
         }
 
         return $policy;
@@ -96,27 +112,33 @@ class ManagedRetryPolicy implements RetryPolicyInterface
     private function extractPolicy(array $source): array
     {
         return [
-            'maxAttempts' => isset($source['maxAttempts']) ? (int)$source['maxAttempts'] : 0,
-            'retryQueues' => isset($source['retryQueues']) && is_array($source['retryQueues'])
-                ? $source['retryQueues']
-                : [],
-            'deadQueue' => isset($source['deadQueue']) && is_string($source['deadQueue'])
-                ? $source['deadQueue']
-                : null,
-            'exhaustedAction' => isset($source['exhaustedAction']) && is_string($source['exhaustedAction'])
-                ? $source['exhaustedAction']
-                : 'reject',
-            'retryExchange' => isset($source['retryExchange']) && is_string($source['retryExchange'])
-                ? $source['retryExchange']
-                : 'retry-exchange',
-            'deadExchange' => isset($source['deadExchange']) && is_string($source['deadExchange'])
-                ? $source['deadExchange']
-                : '',
+            'maxAttempts' => $source['maxAttempts'] ?? null,
+            'retryQueues' => $source['retryQueues'] ?? [],
+            'deadQueue' => $source['deadQueue'] ?? null,
+            'exhaustedAction' => $source['exhaustedAction'] ?? 'reject',
+            'retryExchange' => $source['retryExchange'] ?? null,
+            'deadExchange' => $source['deadExchange'] ?? '',
         ];
     }
 
+    /**
+     * @param array $policy
+     * @return array
+     * @throws InvalidConfigException
+     */
     private function finalizePolicy(array $policy): array
     {
+        if ($policy['enabled']
+            && $policy['retryExchange'] !== null
+            && (!is_string($policy['retryExchange']) || $policy['retryExchange'] === '')
+        ) {
+            throw new InvalidConfigException('retry policy retryExchange must be a non-empty string.');
+        }
+
+        $policy['retryExchange'] = $this->service->resolveRetryExchange(
+            is_string($policy['retryExchange']) ? $policy['retryExchange'] : null
+        );
+
         if ($policy['enabled']) {
             $this->validateEnabledPolicy($policy);
         }
@@ -124,18 +146,47 @@ class ManagedRetryPolicy implements RetryPolicyInterface
         return $policy;
     }
 
+    /**
+     * @param array $policy
+     * @return void
+     * @throws InvalidConfigException
+     */
     private function validateEnabledPolicy(array $policy): void
     {
-        if ((int)$policy['maxAttempts'] <= 0) {
-            throw new InvalidArgumentException('retry policy maxAttempts must be a positive integer.');
+        if (!is_int($policy['maxAttempts']) || $policy['maxAttempts'] <= 0) {
+            throw new InvalidConfigException('retry policy maxAttempts must be a positive integer.');
         }
 
         if (!in_array($policy['exhaustedAction'], ['reject', 'stop'], true)) {
-            throw new InvalidArgumentException('retry policy exhaustedAction must be reject or stop.');
+            throw new InvalidConfigException('retry policy exhaustedAction must be reject or stop.');
         }
 
-        if ($policy['retryExchange'] === '') {
-            throw new InvalidArgumentException('retry policy retryExchange must be a non-empty string.');
+        if (!is_array($policy['retryQueues'])) {
+            throw new InvalidConfigException('retry policy retryQueues must be an array.');
+        }
+
+        if ($policy['deadQueue'] !== null && (!is_string($policy['deadQueue']) || $policy['deadQueue'] === '')) {
+            throw new InvalidConfigException('retry policy deadQueue must be a non-empty string or null.');
+        }
+
+        if (!is_string($policy['deadExchange'])) {
+            throw new InvalidConfigException('retry policy deadExchange must be a string.');
+        }
+
+        foreach ($policy['retryQueues'] as $index => $queue) {
+            if (!is_array($queue)) {
+                throw new InvalidConfigException('retry policy retryQueues[' . $index . '] must be an array.');
+            }
+            if (!isset($queue['name']) || !is_string($queue['name']) || $queue['name'] === '') {
+                throw new InvalidConfigException(
+                    'retry policy retryQueues[' . $index . '].name must be a non-empty string.'
+                );
+            }
+            if (!isset($queue['ttlMs']) || !is_int($queue['ttlMs']) || $queue['ttlMs'] <= 0) {
+                throw new InvalidConfigException(
+                    'retry policy retryQueues[' . $index . '].ttlMs must be a positive integer.'
+                );
+            }
         }
     }
 
@@ -207,5 +258,10 @@ class ManagedRetryPolicy implements RetryPolicyInterface
         $max = $maxAttempts > 0 ? $maxAttempts : RetryHeader::MAX_RETRY_COUNT;
 
         return RetryHeader::sanitize($headers[RetryHeader::NAME] ?? null, $max);
+    }
+
+    private function nextAttempt(int $attempts, int $maxAttempts): int
+    {
+        return min($attempts + 1, $maxAttempts);
     }
 }

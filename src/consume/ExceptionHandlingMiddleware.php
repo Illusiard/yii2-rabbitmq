@@ -2,6 +2,7 @@
 
 namespace illusiard\rabbitmq\consume;
 
+use Throwable;
 use Yii;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
@@ -13,18 +14,21 @@ use illusiard\rabbitmq\exceptions\RecoverableException;
 class ExceptionHandlingMiddleware implements MiddlewareInterface
 {
     private ExceptionClassifierInterface $classifier;
+    /** @var callable|null */
+    private $classifiedResultHandler;
 
-    public function __construct(ExceptionClassifierInterface $classifier)
+    public function __construct(ExceptionClassifierInterface $classifier, ?callable $classifiedResultHandler = null)
     {
         $this->classifier = $classifier;
+        $this->classifiedResultHandler = $classifiedResultHandler;
     }
 
-    public function process(ConsumeContext $context, callable $next)
+    public function process(ConsumeContext $context, callable $next): ?ConsumeResult
     {
         try {
             $result = $next($context);
             return ConsumeResult::normalizeHandlerResult($result);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $result = $this->classifier->classify($e, $context);
             $isFatal = $result->getAction() === ConsumeResult::ACTION_STOP;
             $logMessage = $this->buildExceptionLogMessage($e, $context, $isFatal);
@@ -40,11 +44,15 @@ class ExceptionHandlingMiddleware implements MiddlewareInterface
                 Yii::error($logMessage, 'rabbitmq');
             }
 
+            if ($this->classifiedResultHandler !== null) {
+                return ($this->classifiedResultHandler)($result, $context);
+            }
+
             return $result;
         }
     }
 
-    private function buildExceptionLogMessage(\Throwable $e, ConsumeContext $context, bool $fatal): string
+    private function buildExceptionLogMessage(Throwable $e, ConsumeContext $context, bool $fatal): string
     {
         $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::CONSUME_FAILED;
         $meta = $context->getMeta();
