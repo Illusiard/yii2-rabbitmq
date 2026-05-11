@@ -7,11 +7,12 @@ use illusiard\rabbitmq\consume\DefaultExceptionClassifier;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\definitions\consume\MessageMeta;
-use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\exceptions\FatalException;
 use illusiard\rabbitmq\exceptions\RecoverableException;
+use illusiard\rabbitmq\tests\fixtures\RetryTestConsumer;
+use RuntimeException;
 
 class DefaultExceptionClassifierTest extends TestCase
 {
@@ -34,57 +35,33 @@ class DefaultExceptionClassifierTest extends TestCase
     public function testFailFastFalseRetriesOnUnknown(): void
     {
         $classifier = new DefaultExceptionClassifier(false);
-        $result = $classifier->classify(new \RuntimeException('unknown'), $this->context());
+        $result = $classifier->classify(new RuntimeException('unknown'), $this->context());
 
         $this->assertSame(ConsumeResult::ACTION_RETRY, $result->getAction());
     }
 
     public function testConfiguredFatalMatchesStop(): void
     {
-        $classifier = new DefaultExceptionClassifier(true, [\RuntimeException::class], []);
-        $result = $classifier->classify(new \RuntimeException('boom'), $this->context());
+        $classifier = new DefaultExceptionClassifier(true, [RuntimeException::class], []);
+        $result = $classifier->classify(new RuntimeException('boom'), $this->context());
 
         $this->assertSame(ConsumeResult::ACTION_STOP, $result->getAction());
     }
 
     public function testConfiguredRecoverableMatchesRetry(): void
     {
-        $classifier = new DefaultExceptionClassifier(true, [], [\RuntimeException::class]);
-        $result = $classifier->classify(new \RuntimeException('retry'), $this->context());
+        $classifier = new DefaultExceptionClassifier(true, [], [RuntimeException::class]);
+        $result = $classifier->classify(new RuntimeException('retry'), $this->context());
 
         $this->assertSame(ConsumeResult::ACTION_RETRY, $result->getAction());
     }
 
     private function context(): ConsumeContext
     {
-        $consumer = new class implements ConsumerInterface {
-            public function getQueue(): string
-            {
-                return 'queue';
-            }
-
-            public function getHandler()
-            {
-                return function (): bool {
-                    return true;
-                };
-            }
-
-            public function getOptions(): array
-            {
-                return [];
-            }
-
-            public function getMiddlewares(): array
-            {
-                return [];
-            }
-        };
-
         $meta = new MessageMeta([], [], 'payload', 1, 'routing', 'exchange', false);
         $envelope = new Envelope('payload');
         $service = new RabbitMqService();
 
-        return new ConsumeContext($envelope, $meta, $service, $consumer);
+        return new ConsumeContext($envelope, $meta, $service, new RetryTestConsumer());
     }
 }

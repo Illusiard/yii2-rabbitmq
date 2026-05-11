@@ -2,19 +2,23 @@
 
 namespace illusiard\rabbitmq\tests;
 
-use Closure;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\consume\ManagedRetryPolicy;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\definitions\consume\MessageMeta;
-use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
-use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\message\Envelope;
+use illusiard\rabbitmq\tests\fixtures\FakeRetryService;
+use illusiard\rabbitmq\tests\fixtures\RetryTestConsumer;
+use yii\base\InvalidConfigException;
 
 class ManagedRetryPolicyTest extends TestCase
 {
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testDisabledMapsRetryToReject(): void
     {
         $service = new FakeRetryService();
@@ -29,6 +33,10 @@ class ManagedRetryPolicyTest extends TestCase
         $this->assertCount(0, $service->published);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testPublishesToRetryQueueAndIncrementsHeader(): void
     {
         $service = new FakeRetryService();
@@ -52,6 +60,10 @@ class ManagedRetryPolicyTest extends TestCase
         $this->assertSame(1, $service->published[0]['headers']['x-retry-count']);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testDeadQueueAfterMaxAttempts(): void
     {
         $service = new FakeRetryService();
@@ -74,6 +86,10 @@ class ManagedRetryPolicyTest extends TestCase
         $this->assertSame(2, $service->published[0]['headers']['x-retry-count']);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testInvalidRetryCountIsSanitizedToZero(): void
     {
         $service = new FakeRetryService();
@@ -95,6 +111,10 @@ class ManagedRetryPolicyTest extends TestCase
         $this->assertSame(1, $service->published[0]['headers']['x-retry-count']);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testRetryCountIsClampedToMaxAttempts(): void
     {
         $service = new FakeRetryService();
@@ -116,6 +136,10 @@ class ManagedRetryPolicyTest extends TestCase
         $this->assertSame(4, $service->published[0]['headers']['x-retry-count']);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testEnabledPolicyRequiresMaxAttempts(): void
     {
         $service = new FakeRetryService();
@@ -132,6 +156,10 @@ class ManagedRetryPolicyTest extends TestCase
         $policy->apply(ConsumeResult::retry(), $this->context($service, []));
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testExhaustedRetryCanStop(): void
     {
         $service = new FakeRetryService();
@@ -154,52 +182,9 @@ class ManagedRetryPolicyTest extends TestCase
 
     private function context(FakeRetryService $service, array $headers): ConsumeContext
     {
-        $consumer = new class implements ConsumerInterface {
-            public function getQueue(): string
-            {
-                return 'queue';
-            }
-
-            public function getHandler(): Closure
-            {
-                return static fn(): bool => false;
-            }
-
-            public function getOptions(): array
-            {
-                return [];
-            }
-
-            public function getMiddlewares(): array
-            {
-                return [];
-            }
-        };
-
         $meta = new MessageMeta($headers, [], 'payload', 1, 'routing', 'exchange', false);
         $envelope = new Envelope('payload');
 
-        return new ConsumeContext($envelope, $meta, $service, $consumer);
-    }
-}
-
-class FakeRetryService extends RabbitMqService
-{
-    public array $published = [];
-
-    public function publish(
-        string $body,
-        string $exchange = '',
-        string $routingKey = '',
-        array $properties = [],
-        array $headers = []
-    ): void {
-        $this->published[] = [
-            'body' => $body,
-            'exchange' => $exchange,
-            'routingKey' => $routingKey,
-            'properties' => $properties,
-            'headers' => $headers,
-        ];
+        return new ConsumeContext($envelope, $meta, $service, new RetryTestConsumer());
     }
 }

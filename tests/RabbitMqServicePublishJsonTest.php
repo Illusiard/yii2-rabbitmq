@@ -7,10 +7,8 @@ use JsonException;
 use PHPUnit\Framework\MockObject\Exception;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\components\RabbitMqService;
-use illusiard\rabbitmq\contracts\ConnectionInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;
-use illusiard\rabbitmq\contracts\ConsumerInterface;
-use RuntimeException;
+use illusiard\rabbitmq\tests\fixtures\PublisherOnlyConnection;
 use yii\base\InvalidConfigException;
 
 class RabbitMqServicePublishJsonTest extends TestCase
@@ -38,31 +36,7 @@ class RabbitMqServicePublishJsonTest extends TestCase
                 ];
             });
 
-        $connection = new class($publisher) implements ConnectionInterface {
-            private PublisherInterface $publisher;
-            public function __construct(PublisherInterface $publisher)
-            {
-                $this->publisher = $publisher;
-            }
-            public function connect(): void
-            {
-            }
-            public function isConnected(): bool
-            {
-                return true;
-            }
-            public function close(): void
-            {
-            }
-            public function getPublisher(): PublisherInterface
-            {
-                return $this->publisher;
-            }
-            public function getConsumer(): ConsumerInterface
-            {
-                throw new RuntimeException('Not implemented.');
-            }
-        };
+        $connection = new PublisherOnlyConnection($publisher);
 
         $service = new RabbitMqService([
             'connectionFactory' => fn(array $config) => $connection,
@@ -106,31 +80,7 @@ class RabbitMqServicePublishJsonTest extends TestCase
                 ];
             });
 
-        $connection = new class($publisher) implements ConnectionInterface {
-            private PublisherInterface $publisher;
-            public function __construct(PublisherInterface $publisher)
-            {
-                $this->publisher = $publisher;
-            }
-            public function connect(): void
-            {
-            }
-            public function isConnected(): bool
-            {
-                return true;
-            }
-            public function close(): void
-            {
-            }
-            public function getPublisher(): PublisherInterface
-            {
-                return $this->publisher;
-            }
-            public function getConsumer(): ConsumerInterface
-            {
-                throw new RuntimeException('Not implemented.');
-            }
-        };
+        $connection = new PublisherOnlyConnection($publisher);
 
         $service = new RabbitMqService([
             'publishMiddlewares' => [
@@ -165,31 +115,7 @@ class RabbitMqServicePublishJsonTest extends TestCase
                 $captured = $properties;
             });
 
-        $connection = new class($publisher) implements ConnectionInterface {
-            private PublisherInterface $publisher;
-            public function __construct(PublisherInterface $publisher)
-            {
-                $this->publisher = $publisher;
-            }
-            public function connect(): void
-            {
-            }
-            public function isConnected(): bool
-            {
-                return true;
-            }
-            public function close(): void
-            {
-            }
-            public function getPublisher(): PublisherInterface
-            {
-                return $this->publisher;
-            }
-            public function getConsumer(): ConsumerInterface
-            {
-                throw new RuntimeException('Not implemented.');
-            }
-        };
+        $connection = new PublisherOnlyConnection($publisher);
 
         $service = new RabbitMqService([
             'connectionFactory' => fn(array $config) => $connection,

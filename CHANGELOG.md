@@ -28,6 +28,7 @@
 - Topology apply должен быть идемпотентным для совпадающих объявлений; consumer queues валидируются при сборке topology.
 - Topology CLI по умолчанию работает в dry-run режиме, реальное применение требует явного `--dryRun=0`.
 - Стандартные consume/error logs больше не включают payload/body, headers/properties или exception message.
+- `TopologyBuilder` использует общий `ArrayHelper::normalizeItems()`.
 
 ### Fixed
 - Семантика publish (confirm/mandatory) и обработка unroutable.
@@ -36,3 +37,5 @@
 ### Removed
 - Legacy consumer discovery API с `queue()/handler()/options()`.
 - `onStart` callbacks из consume/RPC ready flow.
+- Дублирующий `SetupTopologyController`; остается `TopologyApplyController`.
+- Пустой `AbstractHandler`; контракт задает `HandlerInterface`.

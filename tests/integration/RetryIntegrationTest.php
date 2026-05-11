@@ -11,7 +11,7 @@ use illusiard\rabbitmq\consume\RetryPolicyMiddleware;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\definitions\consume\MessageMeta;
-use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
+use illusiard\rabbitmq\definitions\consumer\RuntimeConsumer;
 use Throwable;
 
 /**
@@ -134,38 +134,7 @@ class RetryIntegrationTest extends IntegrationTestCase
 
     private function buildPipelineHandler(string $queue, callable $handler, array $options): callable
     {
-        $consumerDef = new class ($queue, $handler, $options) implements ConsumerInterface {
-            private string $queue;
-            private $handler;
-            private array $options;
-
-            public function __construct(string $queue, $handler, array $options)
-            {
-                $this->queue = $queue;
-                $this->handler = $handler;
-                $this->options = $options;
-            }
-
-            public function getQueue(): string
-            {
-                return $this->queue;
-            }
-
-            public function getHandler()
-            {
-                return $this->handler;
-            }
-
-            public function getOptions(): array
-            {
-                return $this->options;
-            }
-
-            public function getMiddlewares(): array
-            {
-                return [];
-            }
-        };
+        $consumerDef = new RuntimeConsumer($queue, $handler, $options);
 
         $classifier = new DefaultExceptionClassifier(true);
         $retryPolicy = new ManagedRetryPolicy($this->service, $options);

@@ -5,6 +5,7 @@ namespace illusiard\rabbitmq\topology;
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\exceptions\ErrorCode;
 use illusiard\rabbitmq\exceptions\RabbitMqException;
+use illusiard\rabbitmq\helpers\ArrayHelper;
 use JsonException;
 use ReflectionException;
 use Throwable;
@@ -83,7 +84,7 @@ class TopologyBuilder
         $queues = $config['queues'] ?? $config['queue'] ?? [];
         $bindings = $config['bindings'] ?? $config['binding'] ?? [];
 
-        foreach ($this->normalizeItems($exchanges) as $item) {
+        foreach (ArrayHelper::normalizeItems($exchanges) as $item) {
             if (!is_array($item)) {
                 continue;
             }
@@ -101,7 +102,7 @@ class TopologyBuilder
             ));
         }
 
-        foreach ($this->normalizeItems($queues) as $item) {
+        foreach (ArrayHelper::normalizeItems($queues) as $item) {
             if (!is_array($item)) {
                 continue;
             }
@@ -118,7 +119,7 @@ class TopologyBuilder
             ));
         }
 
-        foreach ($this->normalizeItems($bindings) as $item) {
+        foreach (ArrayHelper::normalizeItems($bindings) as $item) {
             if (!is_array($item)) {
                 continue;
             }
@@ -138,19 +139,6 @@ class TopologyBuilder
         $this->applyLegacyConfig($topology, $config);
     }
 
-    private function normalizeItems($items): array
-    {
-        if (!is_array($items)) {
-            return [];
-        }
-
-        if (!array_is_list($items)) {
-            return [$items];
-        }
-
-        return $items;
-    }
-
     /**
      * @param Topology $topology
      * @param array $config
@@ -165,7 +153,7 @@ class TopologyBuilder
         $retryExchangeType = isset($options['retryExchangeType']) ? (string)$options['retryExchangeType'] : 'direct';
         $retryExchangeDurable = !isset($options['retryExchangeDurable']) || $options['retryExchangeDurable'];
 
-        foreach ($this->normalizeItems($config['main'] ?? []) as $item) {
+        foreach (ArrayHelper::normalizeItems($config['main'] ?? []) as $item) {
             if (!is_array($item)) {
                 continue;
             }
@@ -229,7 +217,7 @@ class TopologyBuilder
             $topology->addBinding(new BindingDefinition($exchange, $queue, $routingKey));
         }
 
-        foreach ($this->normalizeItems($config['retry'] ?? []) as $item) {
+        foreach (ArrayHelper::normalizeItems($config['retry'] ?? []) as $item) {
             if (!is_array($item)) {
                 continue;
             }
@@ -265,7 +253,7 @@ class TopologyBuilder
             $topology->addBinding(new BindingDefinition($retryExchange, $queue, $queue));
         }
 
-        foreach ($this->normalizeItems($config['dead'] ?? []) as $item) {
+        foreach (ArrayHelper::normalizeItems($config['dead'] ?? []) as $item) {
             if (!is_array($item)) {
                 continue;
             }

@@ -12,7 +12,9 @@ use illusiard\rabbitmq\consume\RetryPolicyMiddleware;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\definitions\consume\MessageMeta;
-use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
+use illusiard\rabbitmq\definitions\consumer\RuntimeConsumer;
+use RuntimeException;
+use Throwable;
 
 /**
  * @group integration
@@ -94,6 +96,10 @@ class ConsumeIntegrationTest extends IntegrationTestCase
         }
     }
 
+    /**
+     * @return void
+     * @throws Throwable
+     */
     public function testAMQP_CONSUME_02_fatalExceptionStops(): void
     {
         $queue = $this->uniqueName('fatal_q');
@@ -104,59 +110,28 @@ class ConsumeIntegrationTest extends IntegrationTestCase
         $consumer = new AmqpConsumer($connection);
 
         $handler = function (): bool {
-            throw new \RuntimeException('fatal');
+            throw new RuntimeException('fatal');
         };
 
         $pipelineHandler = $this->buildPipelineHandler($queue, $handler, [
             'consumeFailFast' => true,
         ]);
 
-        $consumer->consume($queue, $pipelineHandler, 1);
+        $consumer->consume($queue, $pipelineHandler);
 
         $this->assertTrue($this->waitForQueueCount($queue, 0));
     }
 
     private function buildPipelineHandler(string $queue, callable $handler, array $options): callable
     {
-        $consumerDef = new class ($queue, $handler, $options) implements ConsumerInterface {
-            private string $queue;
-            private $handler;
-            private array $options;
-
-            public function __construct(string $queue, $handler, array $options)
-            {
-                $this->queue = $queue;
-                $this->handler = $handler;
-                $this->options = $options;
-            }
-
-            public function getQueue(): string
-            {
-                return $this->queue;
-            }
-
-            public function getHandler()
-            {
-                return $this->handler;
-            }
-
-            public function getOptions(): array
-            {
-                return $this->options;
-            }
-
-            public function getMiddlewares(): array
-            {
-                return [];
-            }
-        };
+        $consumerDef = new RuntimeConsumer($queue, $handler, $options);
 
         $classifier = new DefaultExceptionClassifier((bool)($options['consumeFailFast'] ?? true));
         $retryPolicy = new ManagedRetryPolicy($this->service, $options);
         $exceptionMiddleware = new ExceptionHandlingMiddleware($classifier);
         $retryMiddleware = new RetryPolicyMiddleware($retryPolicy);
 
-        $core = function (ConsumeContext $context) use ($handler): ConsumeResult {
+        $core = static function (ConsumeContext $context) use ($handler): ConsumeResult {
             $meta = $context->getMeta();
             $metaArray = [
                 'body' => $meta->getBody(),
@@ -172,10 +147,8 @@ class ConsumeIntegrationTest extends IntegrationTestCase
             return ConsumeResult::normalizeHandlerResult($result);
         };
 
-        $pipeline = function (ConsumeContext $context) use ($exceptionMiddleware, $retryMiddleware, $core): ConsumeResult {
-            $next = function (ConsumeContext $context) use ($retryMiddleware, $core): ConsumeResult {
-                return $retryMiddleware->process($context, $core);
-            };
+        $pipeline = static function (ConsumeContext $context) use ($exceptionMiddleware, $retryMiddleware, $core): ConsumeResult {
+            $next = fn(ConsumeContext $context): ConsumeResult => $retryMiddleware->process($context, $core);
 
             return $exceptionMiddleware->process($context, $next);
         };
@@ -186,7 +159,7 @@ class ConsumeIntegrationTest extends IntegrationTestCase
             $deliveryTag = isset($meta['delivery_tag']) && is_int($meta['delivery_tag']) ? $meta['delivery_tag'] : null;
             $routingKey = isset($meta['routing_key']) && is_string($meta['routing_key']) ? $meta['routing_key'] : null;
             $exchange = isset($meta['exchange']) && is_string($meta['exchange']) ? $meta['exchange'] : null;
-            $redelivered = isset($meta['redelivered']) ? (bool)$meta['redelivered'] : false;
+            $redelivered = isset($meta['redelivered']) && $meta['redelivered'];
 
             $messageMeta = new MessageMeta($headers, $properties, $body, $deliveryTag, $routingKey, $exchange, $redelivered);
             $envelope = $this->service->decodeEnvelope($body, $meta);

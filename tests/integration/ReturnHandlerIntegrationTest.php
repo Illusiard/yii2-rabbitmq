@@ -2,8 +2,8 @@
 
 namespace illusiard\rabbitmq\tests\integration;
 
-use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
-use illusiard\rabbitmq\amqp\ReturnedMessage;
+use illusiard\rabbitmq\tests\integration\fixtures\TestReturnHandler;
+use yii\base\InvalidConfigException;
 
 /**
  * @group integration
@@ -24,12 +24,16 @@ class ReturnHandlerIntegrationTest extends IntegrationTestCase
         $this->setService($service);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testMandatoryReturnInvokesHandler(): void
     {
         $exchange = $this->uniqueName('return-ex');
         $routingKey = 'no.route';
 
-        $this->declareExchange($exchange, 'direct', true);
+        $this->declareExchange($exchange);
 
         $this->service->publish('payload', $exchange, $routingKey);
 
@@ -47,26 +51,5 @@ class ReturnHandlerIntegrationTest extends IntegrationTestCase
         $this->assertGreaterThan(0, $event->replyCode);
         $this->assertNotSame('', $event->replyText);
         $this->assertGreaterThan(0, $event->bodySize);
-    }
-}
-
-class TestReturnHandler implements ReturnHandlerInterface
-{
-    /** @var ReturnedMessage[] */
-    public static array $events = [];
-
-    public function handle(ReturnedMessage $event): void
-    {
-        self::$events[] = $event;
-    }
-
-    public static function reset(): void
-    {
-        self::$events = [];
-    }
-
-    public static function count(): int
-    {
-        return count(self::$events);
     }
 }

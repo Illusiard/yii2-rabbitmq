@@ -13,9 +13,11 @@ use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\definitions\consume\MessageMeta;
 use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
+use illusiard\rabbitmq\definitions\consumer\RuntimeConsumer;
 use illusiard\rabbitmq\definitions\handler\HandlerInterface;
 use illusiard\rabbitmq\definitions\middleware\MiddlewareInterface;
 use illusiard\rabbitmq\helpers\FileHelper;
+use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
 use InvalidArgumentException;
 use Throwable;
@@ -139,6 +141,13 @@ class ConsumeRunner
         return $cwd . DIRECTORY_SEPARATOR . 'runtime' . DIRECTORY_SEPARATOR . 'rabbitmq';
     }
 
+    /**
+     * @param string $queue
+     * @param $handler
+     * @param array $options
+     * @return callable
+     * @throws InvalidConfigException
+     */
     private function buildPipelineHandler(string $queue, $handler, array $options): callable
     {
         $consumer = $this->resolveConsumer($queue, $handler, $options);
@@ -183,20 +192,10 @@ class ConsumeRunner
                 $context = $this->buildFallbackContext($body, $meta, $consumer);
                 $result = $classifier->classify($e, $context);
 
-                if ($result->getAction() === ConsumeResult::ACTION_STOP) {
-                    $this->stopRequested = true;
-                }
-
-                return $result;
+                return $this->finalizeResult($result);
             }
 
-            $result = $runner($context);
-
-            if ($result instanceof ConsumeResult && $result->getAction() === ConsumeResult::ACTION_STOP) {
-                $this->stopRequested = true;
-            }
-
-            return ConsumeResult::normalizeHandlerResult($result);
+            return $this->finalizeResult($runner($context));
         };
     }
 
@@ -206,38 +205,7 @@ class ConsumeRunner
             return $options['consumer'];
         }
 
-        return new class ($queue, $handler, $options) implements ConsumerInterface {
-            private string $queue;
-            private $handler;
-            private array $options;
-
-            public function __construct(string $queue, $handler, array $options)
-            {
-                $this->queue = $queue;
-                $this->handler = $handler;
-                $this->options = $options;
-            }
-
-            public function getQueue(): string
-            {
-                return $this->queue;
-            }
-
-            public function getHandler()
-            {
-                return $this->handler;
-            }
-
-            public function getOptions(): array
-            {
-                return $this->options;
-            }
-
-            public function getMiddlewares(): array
-            {
-                return [];
-            }
-        };
+        return new RuntimeConsumer($queue, $handler, $options);
     }
 
     /**
@@ -281,6 +249,13 @@ class ConsumeRunner
         return '';
     }
 
+    /**
+     * @param ConsumerInterface $consumer
+     * @param array $options
+     * @param string $handlerClass
+     * @return array
+     * @throws InvalidConfigException
+     */
     private function resolveMiddlewares(ConsumerInterface $consumer, array $options, string $handlerClass): array
     {
         $middlewares = [];
@@ -295,32 +270,22 @@ class ConsumeRunner
                 continue;
             }
 
-            if (class_exists($middlewareId)) {
-                $middlewares[] = $this->instantiateMiddleware($middlewareId, $consumer, $handlerClass);
-                continue;
-            }
-
-            if ($registry !== null) {
-                $fqcn = $registry->get($middlewareId);
-                if ($fqcn === null) {
-                    throw new InvalidArgumentException("Middleware not found: $middlewareId");
-                }
-                $middlewares[] = $this->instantiateMiddleware($fqcn, $consumer, $handlerClass);
-                continue;
-            }
-
-            throw new InvalidArgumentException("Middleware not found: $middlewareId");
+            $middlewares[] = $this->instantiateMiddleware(
+                $this->resolveMiddlewareClass($middlewareId, $registry),
+                $consumer,
+                $handlerClass
+            );
         }
 
         $optionMiddlewares = $options['consumeMiddlewares'] ?? $options['middlewares'] ?? [];
         if (is_array($optionMiddlewares)) {
             foreach ($optionMiddlewares as $middleware) {
                 if (is_string($middleware)) {
-                    if (!class_exists($middleware) && $registry !== null) {
-                        $resolved = $registry->get($middleware);
-                        $middleware = $resolved ?? $middleware;
-                    }
-                    $middlewares[] = $this->instantiateMiddleware($middleware, $consumer, $handlerClass);
+                    $middlewares[] = $this->instantiateMiddleware(
+                        $this->resolveMiddlewareClass($middleware, $registry),
+                        $consumer,
+                        $handlerClass
+                    );
                     continue;
                 }
 
@@ -330,11 +295,7 @@ class ConsumeRunner
                 }
 
                 if (is_array($middleware) && isset($middleware['id']) && is_string($middleware['id']) && $registry !== null) {
-                    $fqcn = $registry->get($middleware['id']);
-                    if ($fqcn === null) {
-                        throw new InvalidArgumentException("Middleware not found: {$middleware['id']}");
-                    }
-                    $middleware['class'] = $fqcn;
+                    $middleware['class'] = $this->resolveMiddlewareClass($middleware['id'], $registry);
                     unset($middleware['id']);
                     $middlewares[] = $this->instantiateMiddleware($middleware['class'], $consumer, $handlerClass, $middleware);
                 }
@@ -344,6 +305,30 @@ class ConsumeRunner
         return $middlewares;
     }
 
+    private function resolveMiddlewareClass(string $middleware, $registry): string
+    {
+        if (class_exists($middleware)) {
+            return $middleware;
+        }
+
+        if ($registry !== null) {
+            $resolved = $registry->get($middleware);
+            if ($resolved !== null) {
+                return $resolved;
+            }
+        }
+
+        throw new InvalidArgumentException("Middleware not found: $middleware");
+    }
+
+    /**
+     * @param string $class
+     * @param ConsumerInterface $consumer
+     * @param string $handlerClass
+     * @param array $config
+     * @return MiddlewareInterface
+     * @throws InvalidConfigException
+     */
     private function instantiateMiddleware(string $class, ConsumerInterface $consumer, string $handlerClass, array $config = []): MiddlewareInterface
     {
         $config = $config ?: ['class' => $class];
@@ -362,7 +347,7 @@ class ConsumeRunner
 
     private function buildExceptionClassifier(array $options): DefaultExceptionClassifier
     {
-        $consumeFailFast = isset($options['consumeFailFast']) ? (bool)$options['consumeFailFast'] : true;
+        $consumeFailFast = !isset($options['consumeFailFast']) || $options['consumeFailFast'];
 
         $fatal = $options['fatalExceptions'] ?? $options['fatalExceptionClasses'] ?? [];
         $recoverable = $options['recoverableExceptions'] ?? $options['recoverableExceptionClasses'] ?? [];
@@ -375,17 +360,7 @@ class ConsumeRunner
 
     private function buildContext(string $body, array $meta, ConsumerInterface $consumer): ConsumeContext
     {
-        $headers = isset($meta['headers']) && is_array($meta['headers']) ? $meta['headers'] : [];
-        $properties = isset($meta['properties']) && is_array($meta['properties']) ? $meta['properties'] : [];
-        $deliveryTag = isset($meta['delivery_tag']) && is_int($meta['delivery_tag']) ? $meta['delivery_tag'] : null;
-        $routingKey = isset($meta['routing_key']) && is_string($meta['routing_key']) ? $meta['routing_key'] : null;
-        $exchange = isset($meta['exchange']) && is_string($meta['exchange']) ? $meta['exchange'] : null;
-        $redelivered = isset($meta['redelivered']) ? (bool)$meta['redelivered'] : false;
-
-        $messageMeta = new MessageMeta($headers, $properties, $body, $deliveryTag, $routingKey, $exchange, $redelivered);
-        $envelope = $this->service->decodeEnvelope($body, $meta);
-
-        return new ConsumeContext($envelope, $messageMeta, $this->service, $consumer, $this->stopRequested);
+        return $this->createContext($this->service->decodeEnvelope($body, $meta), $body, $meta, $consumer);
     }
 
     /**
@@ -396,6 +371,16 @@ class ConsumeRunner
      */
     private function buildFallbackContext(string $body, array $meta, ConsumerInterface $consumer): ConsumeContext
     {
+        return $this->createContext(new Envelope($body), $body, $meta, $consumer);
+    }
+
+    private function createContext(Envelope $envelope, string $body, array $meta, ConsumerInterface $consumer): ConsumeContext
+    {
+        return new ConsumeContext($envelope, $this->buildMessageMeta($body, $meta), $this->service, $consumer, $this->stopRequested);
+    }
+
+    private function buildMessageMeta(string $body, array $meta): MessageMeta
+    {
         $headers = isset($meta['headers']) && is_array($meta['headers']) ? $meta['headers'] : [];
         $properties = isset($meta['properties']) && is_array($meta['properties']) ? $meta['properties'] : [];
         $deliveryTag = isset($meta['delivery_tag']) && is_int($meta['delivery_tag']) ? $meta['delivery_tag'] : null;
@@ -403,10 +388,17 @@ class ConsumeRunner
         $exchange = isset($meta['exchange']) && is_string($meta['exchange']) ? $meta['exchange'] : null;
         $redelivered = isset($meta['redelivered']) ? (bool)$meta['redelivered'] : false;
 
-        $messageMeta = new MessageMeta($headers, $properties, $body, $deliveryTag, $routingKey, $exchange, $redelivered);
-        $envelope = new \illusiard\rabbitmq\message\Envelope($body);
+        return new MessageMeta($headers, $properties, $body, $deliveryTag, $routingKey, $exchange, $redelivered);
+    }
 
-        return new ConsumeContext($envelope, $messageMeta, $this->service, $consumer, $this->stopRequested);
+    private function finalizeResult($result): ConsumeResult
+    {
+        $normalized = ConsumeResult::normalizeHandlerResult($result);
+        if ($normalized->getAction() === ConsumeResult::ACTION_STOP) {
+            $this->stopRequested = true;
+        }
+
+        return $normalized;
     }
 
     private function messageMetaToArray(MessageMeta $meta): array

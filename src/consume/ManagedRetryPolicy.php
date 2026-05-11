@@ -6,6 +6,8 @@ use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\retry\RetryHeader;
+use InvalidArgumentException;
+use yii\base\InvalidConfigException;
 
 class ManagedRetryPolicy implements RetryPolicyInterface
 {
@@ -18,6 +20,12 @@ class ManagedRetryPolicy implements RetryPolicyInterface
         $this->options = $options;
     }
 
+    /**
+     * @param ConsumeResult $result
+     * @param ConsumeContext $context
+     * @return ConsumeResult
+     * @throws InvalidConfigException
+     */
     public function apply(ConsumeResult $result, ConsumeContext $context): ConsumeResult
     {
         if ($result->getAction() !== ConsumeResult::ACTION_RETRY) {
@@ -26,7 +34,7 @@ class ManagedRetryPolicy implements RetryPolicyInterface
 
         $policy = $this->normalizePolicy();
         if (!$policy['enabled']) {
-            return ConsumeResult::reject(false);
+            return ConsumeResult::reject();
         }
 
         $meta = $context->getMeta();
@@ -65,41 +73,44 @@ class ManagedRetryPolicy implements RetryPolicyInterface
         ];
 
         if (is_array($managed)) {
-            $policy['enabled'] = (bool)($managed['enabled'] ?? false);
-            $policy['maxAttempts'] = isset($managed['maxAttempts']) ? (int)$managed['maxAttempts'] : 0;
-            $policy['retryQueues'] = isset($managed['retryQueues']) && is_array($managed['retryQueues'])
-                ? $managed['retryQueues']
-                : [];
-            $policy['deadQueue'] = isset($managed['deadQueue']) && is_string($managed['deadQueue'])
-                ? $managed['deadQueue']
-                : null;
-            $policy['exhaustedAction'] = isset($managed['exhaustedAction']) && is_string($managed['exhaustedAction'])
-                ? $managed['exhaustedAction']
-                : 'reject';
-            if ($policy['enabled']) {
-                $this->validateEnabledPolicy($policy);
-            }
-            return $policy;
+            return $this->finalizePolicy(array_merge($policy, $this->extractPolicy($managed), [
+                'enabled' => (bool)($managed['enabled'] ?? false),
+            ]));
         }
 
         if (is_bool($managed)) {
             $policy['enabled'] = $managed;
             $retryPolicy = $this->options['retryPolicy'] ?? [];
             if (is_array($retryPolicy)) {
-                $policy['maxAttempts'] = isset($retryPolicy['maxAttempts']) ? (int)$retryPolicy['maxAttempts'] : 0;
-                $policy['retryQueues'] = isset($retryPolicy['retryQueues']) && is_array($retryPolicy['retryQueues'])
-                    ? $retryPolicy['retryQueues']
-                    : [];
-                $policy['deadQueue'] = isset($retryPolicy['deadQueue']) && is_string($retryPolicy['deadQueue'])
-                    ? $retryPolicy['deadQueue']
-                    : null;
-                $policy['exhaustedAction'] = isset($retryPolicy['exhaustedAction']) && is_string($retryPolicy['exhaustedAction'])
-                    ? $retryPolicy['exhaustedAction']
-                    : 'reject';
+                $policy = array_merge($policy, $this->extractPolicy($retryPolicy));
             }
-            if ($policy['enabled']) {
-                $this->validateEnabledPolicy($policy);
-            }
+
+            return $this->finalizePolicy($policy);
+        }
+
+        return $policy;
+    }
+
+    private function extractPolicy(array $source): array
+    {
+        return [
+            'maxAttempts' => isset($source['maxAttempts']) ? (int)$source['maxAttempts'] : 0,
+            'retryQueues' => isset($source['retryQueues']) && is_array($source['retryQueues'])
+                ? $source['retryQueues']
+                : [],
+            'deadQueue' => isset($source['deadQueue']) && is_string($source['deadQueue'])
+                ? $source['deadQueue']
+                : null,
+            'exhaustedAction' => isset($source['exhaustedAction']) && is_string($source['exhaustedAction'])
+                ? $source['exhaustedAction']
+                : 'reject',
+        ];
+    }
+
+    private function finalizePolicy(array $policy): array
+    {
+        if ($policy['enabled']) {
+            $this->validateEnabledPolicy($policy);
         }
 
         return $policy;
@@ -108,14 +119,22 @@ class ManagedRetryPolicy implements RetryPolicyInterface
     private function validateEnabledPolicy(array $policy): void
     {
         if ((int)$policy['maxAttempts'] <= 0) {
-            throw new \InvalidArgumentException('retry policy maxAttempts must be a positive integer.');
+            throw new InvalidArgumentException('retry policy maxAttempts must be a positive integer.');
         }
 
         if (!in_array($policy['exhaustedAction'], ['reject', 'stop'], true)) {
-            throw new \InvalidArgumentException('retry policy exhaustedAction must be reject or stop.');
+            throw new InvalidArgumentException('retry policy exhaustedAction must be reject or stop.');
         }
     }
 
+    /**
+     * @param ConsumeContext $context
+     * @param string|null $deadQueue
+     * @param string $exhaustedAction
+     * @param int $attempt
+     * @return ConsumeResult
+     * @throws InvalidConfigException
+     */
     private function exhaust(ConsumeContext $context, ?string $deadQueue, string $exhaustedAction, int $attempt): ConsumeResult
     {
         if ($deadQueue !== null && $deadQueue !== '') {
@@ -126,9 +145,16 @@ class ManagedRetryPolicy implements RetryPolicyInterface
             return ConsumeResult::stop();
         }
 
-        return ConsumeResult::reject(false);
+        return ConsumeResult::reject();
     }
 
+    /**
+     * @param ConsumeContext $context
+     * @param string $queue
+     * @param int $attempt
+     * @return ConsumeResult
+     * @throws InvalidConfigException
+     */
     private function publishToQueue(ConsumeContext $context, string $queue, int $attempt): ConsumeResult
     {
         $meta = $context->getMeta();

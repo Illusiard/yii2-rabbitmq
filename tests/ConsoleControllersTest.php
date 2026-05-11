@@ -2,14 +2,12 @@
 
 namespace illusiard\rabbitmq\tests;
 
-use illusiard\rabbitmq\components\RabbitMqService;
 use JsonException;
 use Yii;
 use PHPUnit\Framework\TestCase;
 use PhpAmqpLib\Wire\AMQPTable;
 use illusiard\rabbitmq\console\DlqInspectController;
 use illusiard\rabbitmq\console\HealthcheckController;
-use illusiard\rabbitmq\console\SetupTopologyController;
 use illusiard\rabbitmq\dlq\DlqService;
 use illusiard\rabbitmq\console\ConsumeController;
 use illusiard\rabbitmq\console\DlqPurgeController;
@@ -19,6 +17,9 @@ use illusiard\rabbitmq\console\PublishersController;
 use illusiard\rabbitmq\console\MiddlewaresController;
 use illusiard\rabbitmq\console\TopologyApplyController;
 use illusiard\rabbitmq\console\TopologyStatusController;
+use illusiard\rabbitmq\tests\fixtures\BufferingDlqInspectController;
+use illusiard\rabbitmq\tests\fixtures\ConsoleTestDlqService;
+use illusiard\rabbitmq\tests\fixtures\ConsoleTestRabbitMqService;
 use illusiard\rabbitmq\topology\Topology;
 use illusiard\rabbitmq\topology\ExchangeDefinition;
 use illusiard\rabbitmq\topology\QueueDefinition;
@@ -60,15 +61,7 @@ class ConsoleControllersTest extends TestCase
         });
         Yii::$app->set('rabbitmq', new ConsoleTestRabbitMqService());
 
-        $controller = new class('rabbitmq/dlq-inspect', Yii::$app) extends DlqInspectController {
-            public string $buffer = '';
-
-            public function stdout($string): int
-            {
-                $this->buffer .= $string;
-                return strlen($string);
-            }
-        };
+        $controller = new BufferingDlqInspectController('rabbitmq/dlq-inspect', Yii::$app);
         $controller->json = 1;
 
         $exitCode = $controller->actionIndex('orders.dead');
@@ -148,7 +141,6 @@ class ConsoleControllersTest extends TestCase
             new DlqPurgeController('rabbitmq/dlq-purge', Yii::$app),
             new DlqReplayController('rabbitmq/dlq-replay', Yii::$app),
             new HealthcheckController('rabbitmq/healthcheck', Yii::$app),
-            new SetupTopologyController('rabbitmq/setup-topology', Yii::$app),
             new TopologyApplyController('rabbitmq/topology-apply', Yii::$app),
             new TopologyStatusController('rabbitmq/topology-status', Yii::$app),
         ];
@@ -178,7 +170,6 @@ class ConsoleControllersTest extends TestCase
             DlqReplayController::class => ['exchange', 'routingKey', 'limit'],
             DlqPurgeController::class => ['force'],
             HealthcheckController::class => ['profile', 'timeout', 'json'],
-            SetupTopologyController::class => ['dryRun', 'strict'],
             TopologyApplyController::class => ['dryRun', 'strict'],
             TopologyStatusController::class => ['strict'],
         ];
@@ -223,7 +214,7 @@ class ConsoleControllersTest extends TestCase
      * @throws InvalidConfigException
      * @throws JsonException
      */
-    public function testSetupTopologyPassesDryRunAndStrict(): void
+    public function testTopologyApplyPassesDryRunAndStrict(): void
     {
         $service = new ConsoleTestRabbitMqService();
         $topology = new Topology();
@@ -233,7 +224,7 @@ class ConsoleControllersTest extends TestCase
         $service->buildTopologyReturn = $topology;
         Yii::$app->set('rabbitmq', $service);
 
-        $controller = new SetupTopologyController('rabbitmq/setup-topology', Yii::$app);
+        $controller = new TopologyApplyController('rabbitmq/topology-apply', Yii::$app);
         $controller->dryRun = true;
         $controller->strict = true;
 
@@ -297,65 +288,5 @@ class ConsoleControllersTest extends TestCase
         $exitCode = $controller->actionIndex();
 
         $this->assertSame(1, $exitCode);
-    }
-}
-
-class ConsoleTestDlqService
-{
-    private array $items;
-
-    public function __construct(array $items)
-    {
-        $this->items = $items;
-    }
-
-    public function inspect(string $queue, int $limit = 10, bool $acknowledge = false): array
-    {
-        return $this->items;
-    }
-}
-
-class ConsoleTestRabbitMqService extends RabbitMqService
-{
-    public array $topology = [];
-    public bool $pingResult = true;
-    public ?string $lastError = null;
-    public array $profiles = [];
-    public bool $buildTopologyCalled = false;
-    public bool $applyTopologyCalled = false;
-    public ?Topology $buildTopologyReturn = null;
-    public bool $lastDryRun = false;
-    public bool $pingCalled = false;
-
-    public function ping(int $timeout = 3): bool
-    {
-        $this->pingCalled = true;
-        return $this->pingResult;
-    }
-
-    public function getLastError(): ?string
-    {
-        return $this->lastError;
-    }
-
-    public function forProfile(string $name): self
-    {
-        return $this;
-    }
-
-    public function buildTopology(): Topology
-    {
-        $this->buildTopologyCalled = true;
-        if ($this->buildTopologyReturn instanceof Topology) {
-            return $this->buildTopologyReturn;
-        }
-
-        return new Topology();
-    }
-
-    public function applyTopology(Topology $topology, bool $dryRun = false): void
-    {
-        $this->applyTopologyCalled = true;
-        $this->lastDryRun = $dryRun;
     }
 }

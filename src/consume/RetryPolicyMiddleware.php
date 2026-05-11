@@ -15,7 +15,12 @@ class RetryPolicyMiddleware implements MiddlewareInterface
         $this->policy = $policy;
     }
 
-    public function process(ConsumeContext $context, callable $next)
+    /**
+     * @param ConsumeContext $context
+     * @param callable $next
+     * @return ConsumeResult
+     */
+    public function process(ConsumeContext $context, callable $next): ConsumeResult
     {
         $result = $next($context);
         $normalized = ConsumeResult::normalizeHandlerResult($result);

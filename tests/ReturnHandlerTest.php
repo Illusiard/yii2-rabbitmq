@@ -7,10 +7,10 @@ use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
-use illusiard\rabbitmq\amqp\AmqpConnection;
 use illusiard\rabbitmq\amqp\AmqpPublisher;
 use illusiard\rabbitmq\amqp\ReturnedMessage;
-use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
+use illusiard\rabbitmq\tests\fixtures\RecordingReturnHandler;
+use illusiard\rabbitmq\tests\fixtures\TestAmqpConnection;
 
 class ReturnHandlerTest extends TestCase
 {
@@ -34,29 +34,7 @@ class ReturnHandlerTest extends TestCase
             ->getMock();
         $amqp->method('channel')->willReturn($channel);
 
-        $connection = new class($amqp) extends AmqpConnection {
-            private AMQPStreamConnection $amqp;
-
-            public function __construct(AMQPStreamConnection $amqp)
-            {
-                $this->amqp = $amqp;
-                parent::__construct([
-                    'host' => 'localhost',
-                    'port' => 5672,
-                    'user' => 'guest',
-                    'password' => 'guest',
-                    'vhost' => '/',
-                    'connectionTimeout' => 1,
-                    'readWriteTimeout' => 1,
-                    'heartbeat' => 30,
-                ]);
-            }
-
-            public function getAmqpConnection(): AMQPStreamConnection
-            {
-                return $this->amqp;
-            }
-        };
+        $connection = new TestAmqpConnection($amqp);
 
         $publisher = new AmqpPublisher($connection, [
             'mandatory' => true,
@@ -92,15 +70,5 @@ class ReturnHandlerTest extends TestCase
         $this->assertSame(['x-trace-id' => 't-1'], $handler->event->headers);
         $this->assertSame(['x-trace-id' => 't-1'], $handler->event->properties['application_headers']);
         $this->assertSame(7, $handler->event->bodySize);
-    }
-}
-
-class RecordingReturnHandler implements ReturnHandlerInterface
-{
-    public ?ReturnedMessage $event = null;
-
-    public function handle(ReturnedMessage $event): void
-    {
-        $this->event = $event;
     }
 }

@@ -2,15 +2,13 @@
 
 namespace illusiard\rabbitmq\tests;
 
-use illusiard\rabbitmq\contracts\ConnectionInterface;
-use illusiard\rabbitmq\contracts\ConsumerInterface;
-use illusiard\rabbitmq\contracts\PublisherInterface;
-use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
-use illusiard\rabbitmq\definitions\middleware\MiddlewareInterface;
-use RuntimeException;
+use illusiard\rabbitmq\tests\fixtures\NonHandlerInvokable;
+use illusiard\rabbitmq\tests\fixtures\RunnerLockRabbitMqService;
+use illusiard\rabbitmq\tests\fixtures\RunnerMiddlewareRabbitMqService;
+use illusiard\rabbitmq\tests\fixtures\RunnerRecordingRabbitMqService;
+use illusiard\rabbitmq\tests\fixtures\TestRunnerUserMiddleware;
 use Yii;
-use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\orchestration\ConsumeRunner;
 use illusiard\rabbitmq\orchestration\RunnerOptions;
 use PHPUnit\Framework\TestCase;
@@ -40,68 +38,7 @@ class ConsumeRunnerTest extends TestCase
         $lockFile = sys_get_temp_dir() . '/rabbitmq_runner_' . uniqid('', true) . '.lock';
         @unlink($lockFile);
 
-        $service = new class ($lockFile) extends RabbitMqService {
-            public string $expectedLockFile;
-
-            public function __construct(string $lockFile)
-            {
-                $this->expectedLockFile = $lockFile;
-                parent::__construct();
-            }
-
-            public function getConnection(): ConnectionInterface
-            {
-                $lockFile = $this->expectedLockFile;
-                return new class ($lockFile) implements ConnectionInterface {
-                    private string $lockFile;
-
-                    public function __construct(string $lockFile)
-                    {
-                        $this->lockFile = $lockFile;
-                    }
-
-                    public function connect(): void
-                    {
-                    }
-
-                    public function isConnected(): bool
-                    {
-                        return false;
-                    }
-
-                    public function close(): void
-                    {
-                    }
-
-                    public function getPublisher(): PublisherInterface
-                    {
-                        throw new RuntimeException('Not used in tests.');
-                    }
-
-                    public function getConsumer(): ConsumerInterface
-                    {
-                        $lockFile = $this->lockFile;
-                        return new class ($lockFile) implements ConsumerInterface {
-                            private string $lockFile;
-
-                            public function __construct(string $lockFile)
-                            {
-                                $this->lockFile = $lockFile;
-                            }
-
-                            public function consume(string $queue, callable $handler, int $prefetch = 1): void
-                            {
-                                if (!is_file($this->lockFile)) {
-                                    throw new RuntimeException('Lock file missing.');
-                                }
-
-                                throw new RuntimeException('Forced failure.');
-                            }
-                        };
-                    }
-                };
-            }
-        };
+        $service = new RunnerLockRabbitMqService($lockFile, 'Lock file missing.');
 
         $runner = new ConsumeRunner($service);
         $options = new RunnerOptions($lockFile, null, 'consumer-id');
@@ -120,68 +57,7 @@ class ConsumeRunnerTest extends TestCase
         Yii::setAlias('@runtime', $runtime);
         $lockFile = $runtime . '/rabbitmq/consumer-id.lock';
 
-        $service = new class ($lockFile) extends RabbitMqService {
-            public string $expectedLockFile;
-
-            public function __construct(string $lockFile)
-            {
-                $this->expectedLockFile = $lockFile;
-                parent::__construct();
-            }
-
-            public function getConnection(): ConnectionInterface
-            {
-                $lockFile = $this->expectedLockFile;
-                return new class ($lockFile) implements ConnectionInterface {
-                    private string $lockFile;
-
-                    public function __construct(string $lockFile)
-                    {
-                        $this->lockFile = $lockFile;
-                    }
-
-                    public function connect(): void
-                    {
-                    }
-
-                    public function isConnected(): bool
-                    {
-                        return false;
-                    }
-
-                    public function close(): void
-                    {
-                    }
-
-                    public function getPublisher(): PublisherInterface
-                    {
-                        throw new RuntimeException('Not used in tests.');
-                    }
-
-                    public function getConsumer(): ConsumerInterface
-                    {
-                        $lockFile = $this->lockFile;
-                        return new class ($lockFile) implements ConsumerInterface {
-                            private string $lockFile;
-
-                            public function __construct(string $lockFile)
-                            {
-                                $this->lockFile = $lockFile;
-                            }
-
-                            public function consume(string $queue, callable $handler, int $prefetch = 1): void
-                            {
-                                if (!is_file($this->lockFile)) {
-                                    throw new RuntimeException('Default lock file missing.');
-                                }
-
-                                throw new RuntimeException('Forced failure.');
-                            }
-                        };
-                    }
-                };
-            }
-        };
+        $service = new RunnerLockRabbitMqService($lockFile, 'Default lock file missing.');
 
         $runner = new ConsumeRunner($service);
         $options = new RunnerOptions(null, null, 'consumer-id');
@@ -196,60 +72,7 @@ class ConsumeRunnerTest extends TestCase
 
     public function testStringHandlerMustImplementHandlerInterface(): void
     {
-        $service = new class extends RabbitMqService {
-            public bool $consumeCalled = false;
-
-            public function getConnection(): ConnectionInterface
-            {
-                $service = $this;
-
-                return new class ($service) implements ConnectionInterface {
-                    private RabbitMqService $service;
-
-                    public function __construct(RabbitMqService $service)
-                    {
-                        $this->service = $service;
-                    }
-
-                    public function connect(): void
-                    {
-                    }
-
-                    public function isConnected(): bool
-                    {
-                        return false;
-                    }
-
-                    public function close(): void
-                    {
-                    }
-
-                    public function getPublisher(): PublisherInterface
-                    {
-                        throw new RuntimeException('Not used in tests.');
-                    }
-
-                    public function getConsumer(): ConsumerInterface
-                    {
-                        $service = $this->service;
-
-                        return new class ($service) implements ConsumerInterface {
-                            private RabbitMqService $service;
-
-                            public function __construct(RabbitMqService $service)
-                            {
-                                $this->service = $service;
-                            }
-
-                            public function consume(string $queue, callable $handler, int $prefetch = 1): void
-                            {
-                                $this->service->consumeCalled = true;
-                            }
-                        };
-                    }
-                };
-            }
-        };
+        $service = new RunnerRecordingRabbitMqService();
 
         $runner = new ConsumeRunner($service);
         $exitCode = $runner->run('queue', NonHandlerInvokable::class);
@@ -262,47 +85,7 @@ class ConsumeRunnerTest extends TestCase
     {
         TestRunnerUserMiddleware::$actions = [];
 
-        $service = new class extends RabbitMqService {
-            public function getConnection(): ConnectionInterface
-            {
-                return new class implements ConnectionInterface {
-                    public function connect(): void
-                    {
-                    }
-
-                    public function isConnected(): bool
-                    {
-                        return false;
-                    }
-
-                    public function close(): void
-                    {
-                    }
-
-                    public function getPublisher(): PublisherInterface
-                    {
-                        throw new RuntimeException('Not used in tests.');
-                    }
-
-                    public function getConsumer(): ConsumerInterface
-                    {
-                        return new class implements ConsumerInterface {
-                            public function consume(string $queue, callable $handler, int $prefetch = 1): void
-                            {
-                                $handler('{"ok":true}', [
-                                    'headers' => [],
-                                    'properties' => [],
-                                    'delivery_tag' => 1,
-                                    'routing_key' => 'routing',
-                                    'exchange' => 'exchange',
-                                    'redelivered' => false,
-                                ]);
-                            }
-                        };
-                    }
-                };
-            }
-        };
+        $service = new RunnerMiddlewareRabbitMqService();
 
         $runner = new ConsumeRunner($service);
         $exitCode = $runner->run('queue', function (): ConsumeResult {
@@ -321,28 +104,5 @@ class ConsumeRunnerTest extends TestCase
             'handler',
             'user-after-reject',
         ], TestRunnerUserMiddleware::$actions);
-    }
-}
-
-class NonHandlerInvokable
-{
-    public function __invoke(): bool
-    {
-        return true;
-    }
-}
-
-class TestRunnerUserMiddleware implements MiddlewareInterface
-{
-    public static array $actions = [];
-
-    public function process(ConsumeContext $context, callable $next): ConsumeResult
-    {
-        self::$actions[] = 'user-before';
-        $result = $next($context);
-        $normalized = ConsumeResult::normalizeHandlerResult($result);
-        self::$actions[] = 'user-after-' . $normalized->getAction();
-
-        return $normalized;
     }
 }

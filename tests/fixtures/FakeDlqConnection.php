@@ -1,0 +1,51 @@
+<?php
+
+namespace illusiard\rabbitmq\tests\fixtures;
+
+use illusiard\rabbitmq\contracts\ConnectionInterface;
+use illusiard\rabbitmq\contracts\ConsumerInterface;
+use illusiard\rabbitmq\contracts\PublisherInterface;
+use RuntimeException;
+
+class FakeDlqConnection implements ConnectionInterface
+{
+    private PublisherInterface $publisher;
+    private FakeDlqChannel $channel;
+    private bool $connected = false;
+
+    public function __construct(PublisherInterface $publisher, FakeDlqChannel $channel)
+    {
+        $this->publisher = $publisher;
+        $this->channel = $channel;
+    }
+
+    public function connect(): void
+    {
+        $this->connected = true;
+    }
+
+    public function isConnected(): bool
+    {
+        return $this->connected;
+    }
+
+    public function close(): void
+    {
+        $this->connected = false;
+    }
+
+    public function getPublisher(): PublisherInterface
+    {
+        return $this->publisher;
+    }
+
+    public function getConsumer(): ConsumerInterface
+    {
+        throw new RuntimeException('Not implemented.');
+    }
+
+    public function getAmqpConnection(): object
+    {
+        return new FakeDlqAmqpConnection($this->channel);
+    }
+}

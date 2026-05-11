@@ -8,12 +8,21 @@ use illusiard\rabbitmq\amqp\ReturnedMessage;
 use illusiard\rabbitmq\amqp\InMemoryReturnSink;
 use illusiard\rabbitmq\exceptions\PublishException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
+use illusiard\rabbitmq\tests\integration\fixtures\TestConfirmTracker;
+use ReflectionException;
+use ReflectionProperty;
+use yii\base\InvalidConfigException;
 
 /**
  * @group integration
  */
 class ConfirmIntegrationTest extends IntegrationTestCase
 {
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws ReflectionException
+     */
     public function testAMQP_CONFIRM_01_ackCorrelation(): void
     {
         $exchange = $this->uniqueName('confirm_ex');
@@ -48,6 +57,11 @@ class ConfirmIntegrationTest extends IntegrationTestCase
         }
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws ReflectionException
+     */
     public function testAMQP_CONFIRM_02_multipleAck(): void
     {
         $exchange = $this->uniqueName('confirm_ex_multi');
@@ -76,6 +90,10 @@ class ConfirmIntegrationTest extends IntegrationTestCase
         $this->assertTrue($tracker->ackMultipleSeen);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testAMQP_MANDATORY_01_unroutable(): void
     {
         $exchange = $this->uniqueName('mandatory_ex');
@@ -123,6 +141,10 @@ class ConfirmIntegrationTest extends IntegrationTestCase
         );
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testAMQP_CONFIRM_MANDATORY_01_strictUnroutableThrows(): void
     {
         $exchange = $this->uniqueName('confirm_mandatory_ex');
@@ -177,13 +199,18 @@ class ConfirmIntegrationTest extends IntegrationTestCase
         }
     }
 
+    /**
+     * @param object $publisher
+     * @param PublishConfirmTracker $tracker
+     * @throws ReflectionException
+     */
     private function injectTracker(object $publisher, PublishConfirmTracker $tracker): void
     {
         if (!$publisher instanceof AmqpPublisher) {
             $this->markTestSkipped('Publisher is not AMQP-based.');
         }
 
-        $ref = new \ReflectionProperty($publisher, 'tracker');
+        $ref = new ReflectionProperty($publisher, 'tracker');
         $ref->setAccessible(true);
         $ref->setValue($publisher, $tracker);
     }
@@ -198,47 +225,5 @@ class ConfirmIntegrationTest extends IntegrationTestCase
             $event->routingKey,
             $event->messageId ?? 'null'
         );
-    }
-}
-
-class TestConfirmTracker extends PublishConfirmTracker
-{
-    public array $registeredMessageIds = [];
-    public array $ackedSeqNos = [];
-    public array $nackedSeqNos = [];
-    public bool $ackMultipleSeen = false;
-    public bool $nackMultipleSeen = false;
-
-    public function register(
-        int $seqNo,
-        ?string $messageId,
-        float $timestampStart,
-        ?string $correlationId = null,
-        ?string $exchange = null,
-        ?string $routingKey = null
-    ): void
-    {
-        parent::register($seqNo, $messageId, $timestampStart, $correlationId, $exchange, $routingKey);
-        if ($messageId) {
-            $this->registeredMessageIds[$messageId] = true;
-        }
-    }
-
-    public function markAck(int $deliveryTag, bool $multiple): void
-    {
-        parent::markAck($deliveryTag, $multiple);
-        $this->ackedSeqNos[] = $deliveryTag;
-        if ($multiple) {
-            $this->ackMultipleSeen = true;
-        }
-    }
-
-    public function markNack(int $deliveryTag, bool $multiple): void
-    {
-        parent::markNack($deliveryTag, $multiple);
-        $this->nackedSeqNos[] = $deliveryTag;
-        if ($multiple) {
-            $this->nackMultipleSeen = true;
-        }
     }
 }

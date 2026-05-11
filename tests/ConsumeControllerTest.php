@@ -2,10 +2,13 @@
 
 namespace illusiard\rabbitmq\tests;
 
+use JsonException;
 use Yii;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\console\ConsumeController;
 use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
+use illusiard\rabbitmq\tests\fixtures\ConsumeControllerRabbitMqService;
+use yii\base\InvalidConfigException;
 
 class ConsumeControllerTest extends TestCase
 {
@@ -32,9 +35,14 @@ class ConsumeControllerTest extends TestCase
         parent::tearDown();
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function testConsumeControllerPassesOptionsToService(): void
     {
-        $service = new FakeRabbitMqService();
+        $service = new ConsumeControllerRabbitMqService();
         Yii::$app->set('rabbitmq', $service);
 
         $this->prepareAppConsumers();
@@ -51,7 +59,7 @@ class ConsumeControllerTest extends TestCase
                 ['name' => 'orders.retry.5s', 'ttlMs' => 5000],
             ],
             'deadQueue' => 'orders.dead',
-        ]);
+        ], JSON_THROW_ON_ERROR);
         $controller->consumeFailFast = 0;
         $controller->fatalExceptionClasses = 'RuntimeException,InvalidArgumentException';
         $controller->recoverableExceptionClasses = 'Exception';
@@ -136,74 +144,5 @@ PHP
             }
         }
         @rmdir($dir);
-    }
-}
-
-class FakeRabbitMqService extends \illusiard\rabbitmq\components\RabbitMqService
-{
-    public ?string $lastQueue = null;
-    public ?int $lastPrefetch = null;
-    public bool $handlerCalled = false;
-    public ?string $handlerQueue = null;
-
-    public function getConnection(): \illusiard\rabbitmq\contracts\ConnectionInterface
-    {
-        $parent = $this;
-        return new class ($parent) implements \illusiard\rabbitmq\contracts\ConnectionInterface {
-            private FakeRabbitMqService $parent;
-
-            public function __construct(FakeRabbitMqService $parent)
-            {
-                $this->parent = $parent;
-            }
-
-            public function connect(): void
-            {
-            }
-
-            public function isConnected(): bool
-            {
-                return false;
-            }
-
-            public function close(): void
-            {
-            }
-
-            public function getPublisher(): \illusiard\rabbitmq\contracts\PublisherInterface
-            {
-                throw new \RuntimeException('Not used in tests.');
-            }
-
-            public function getConsumer(): \illusiard\rabbitmq\contracts\ConsumerInterface
-            {
-                $parent = $this->parent;
-                return new class ($parent) implements \illusiard\rabbitmq\contracts\ConsumerInterface {
-                    private FakeRabbitMqService $parent;
-
-                    public function __construct(FakeRabbitMqService $parent)
-                    {
-                        $this->parent = $parent;
-                    }
-
-                    public function consume(string $queue, callable $handler, int $prefetch = 1): void
-                    {
-                        $this->parent->lastQueue = $queue;
-                        $this->parent->lastPrefetch = $prefetch;
-                        $handler('body', [
-                            'body' => 'body',
-                            'headers' => [],
-                            'properties' => [],
-                            'delivery_tag' => 1,
-                            'routing_key' => 'routing',
-                            'exchange' => 'exchange',
-                            'redelivered' => false,
-                        ]);
-                        $this->parent->handlerCalled = true;
-                        $this->parent->handlerQueue = $queue;
-                    }
-                };
-            }
-        };
     }
 }

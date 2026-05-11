@@ -3,14 +3,20 @@
 namespace illusiard\rabbitmq\tests;
 
 use illusiard\rabbitmq\components\RabbitMqService;
-use illusiard\rabbitmq\definitions\consumer\AbstractConsumer;
-use illusiard\rabbitmq\definitions\publisher\AbstractPublisher;
-use illusiard\rabbitmq\profile\OptionsMerger;
-use illusiard\rabbitmq\profile\RabbitMqProfileInterface;
+use illusiard\rabbitmq\tests\fixtures\TestConsumerDefinition;
+use illusiard\rabbitmq\tests\fixtures\TestProfile;
+use illusiard\rabbitmq\tests\fixtures\TestPublisherDefinition;
 use PHPUnit\Framework\TestCase;
+use ReflectionException;
+use yii\base\InvalidConfigException;
 
 class ProfileDefaultsTest extends TestCase
 {
+    /**
+     * @return void
+     * @throws ReflectionException
+     * @throws InvalidConfigException
+     */
     public function testProfileDefaultsAppliedToConsumerAndPublisher(): void
     {
         $service = new RabbitMqService([
@@ -34,93 +40,5 @@ class ProfileDefaultsTest extends TestCase
             ],
         ], $publisher->getOptions());
         $this->assertSame(['base-publish', 'publish-extra'], $publisher->getMiddlewares());
-    }
-}
-
-class TestProfile implements RabbitMqProfileInterface
-{
-    public function getConsumerDefaults(): array
-    {
-        return [
-            'prefetch' => 5,
-            'retryPolicy' => [
-                'maxAttempts' => 3,
-                'delaySeconds' => 5,
-            ],
-        ];
-    }
-
-    public function getPublisherDefaults(): array
-    {
-        return [
-            'confirm' => false,
-            'headers' => [
-                'x-service' => 'test',
-            ],
-        ];
-    }
-
-    public function getMiddlewareDefaults(): array
-    {
-        return [
-            'consumer' => ['base-consume'],
-            'publisher' => ['base-publish'],
-        ];
-    }
-
-    public function mergeOptions(array $defaults, array $overrides): array
-    {
-        return OptionsMerger::merge($defaults, $overrides);
-    }
-}
-
-class TestConsumerDefinition extends AbstractConsumer
-{
-    public function getQueue(): string
-    {
-        return 'queue';
-    }
-
-    public function getHandler()
-    {
-        return function (): bool {
-            return true;
-        };
-    }
-
-    public function getOptions(): array
-    {
-        return [
-            'prefetch' => 1,
-            'retryPolicy' => [
-                'maxAttempts' => null,
-                'delaySeconds' => 10,
-            ],
-        ];
-    }
-
-    public function getMiddlewares(): array
-    {
-        return ['consume-extra'];
-    }
-}
-
-class TestPublisherDefinition extends AbstractPublisher
-{
-    public function getExchange(): string
-    {
-        return 'exchange';
-    }
-
-    public function getOptions(): array
-    {
-        return [
-            'confirm' => true,
-        ];
-    }
-
-    public function getMiddlewares(): array
-    {
-        return ['publish-extra'];
     }
 }

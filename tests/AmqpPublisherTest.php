@@ -6,7 +6,8 @@ use PHPUnit\Framework\TestCase;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use illusiard\rabbitmq\amqp\AmqpConnection;
-use illusiard\rabbitmq\amqp\AmqpPublisher;
+use illusiard\rabbitmq\tests\fixtures\TestAmqpConnection;
+use illusiard\rabbitmq\tests\fixtures\TestAmqpPublisher;
 
 class AmqpPublisherTest extends TestCase
 {
@@ -67,29 +68,7 @@ class AmqpPublisherTest extends TestCase
 
         $amqpConnection->method('channel')->willReturn($channel);
 
-        return new class($amqpConnection) extends AmqpConnection {
-            private AMQPStreamConnection $amqp;
-
-            public function __construct(AMQPStreamConnection $amqp)
-            {
-                $this->amqp = $amqp;
-                parent::__construct([
-                    'host' => 'localhost',
-                    'port' => 5672,
-                    'user' => 'guest',
-                    'password' => 'guest',
-                    'vhost' => '/',
-                    'connectionTimeout' => 1,
-                    'readWriteTimeout' => 1,
-                    'heartbeat' => 30,
-                ]);
-            }
-
-            public function getAmqpConnection(): AMQPStreamConnection
-            {
-                return $this->amqp;
-            }
-        };
+        return new TestAmqpConnection($amqpConnection);
     }
 
     private function createChannelMock(array $methods): AMQPChannel
@@ -98,21 +77,5 @@ class AmqpPublisherTest extends TestCase
             ->disableOriginalConstructor()
             ->onlyMethods($methods)
             ->getMock();
-    }
-}
-
-class TestAmqpPublisher extends AmqpPublisher
-{
-    public bool $waitCalled = false;
-
-    protected function waitForPublish(
-        AMQPChannel $channel,
-        int $seqNo,
-        string $messageId,
-        ?string $correlationId,
-        string $exchange,
-        string $routingKey
-    ): void {
-        $this->waitCalled = true;
     }
 }
