@@ -126,11 +126,16 @@ class JsonMessageSerializer implements MessageSerializerInterface
         }
 
         try {
-            $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+            json_decode($body, true, 512, JSON_THROW_ON_ERROR);
         } catch (JsonException) {
             return false;
         }
 
-        return is_array($data) && $this->isEnvelopeShape($data);
+        return true;
+    }
+
+    public function getContentType(): string
+    {
+        return self::CONTENT_TYPE;
     }
 }

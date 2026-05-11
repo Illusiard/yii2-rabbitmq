@@ -54,7 +54,7 @@ class ManagedRetryPolicy implements RetryPolicyInterface
         if ($attempts < count($retryQueues)) {
             $next = $retryQueues[$attempts] ?? null;
             if (is_array($next) && isset($next['name']) && is_string($next['name']) && $next['name'] !== '') {
-                return $this->publishToQueue($context, $next['name'], $attempts + 1);
+                return $this->publishToQueue($context, $policy['retryExchange'], $next['name'], $attempts + 1);
             }
         }
 
@@ -70,6 +70,8 @@ class ManagedRetryPolicy implements RetryPolicyInterface
             'retryQueues' => [],
             'deadQueue' => null,
             'exhaustedAction' => 'reject',
+            'retryExchange' => 'retry-exchange',
+            'deadExchange' => '',
         ];
 
         if (is_array($managed)) {
@@ -104,6 +106,12 @@ class ManagedRetryPolicy implements RetryPolicyInterface
             'exhaustedAction' => isset($source['exhaustedAction']) && is_string($source['exhaustedAction'])
                 ? $source['exhaustedAction']
                 : 'reject',
+            'retryExchange' => isset($source['retryExchange']) && is_string($source['retryExchange'])
+                ? $source['retryExchange']
+                : 'retry-exchange',
+            'deadExchange' => isset($source['deadExchange']) && is_string($source['deadExchange'])
+                ? $source['deadExchange']
+                : '',
         ];
     }
 
@@ -125,6 +133,10 @@ class ManagedRetryPolicy implements RetryPolicyInterface
         if (!in_array($policy['exhaustedAction'], ['reject', 'stop'], true)) {
             throw new InvalidArgumentException('retry policy exhaustedAction must be reject or stop.');
         }
+
+        if ($policy['retryExchange'] === '') {
+            throw new InvalidArgumentException('retry policy retryExchange must be a non-empty string.');
+        }
     }
 
     /**
@@ -138,7 +150,9 @@ class ManagedRetryPolicy implements RetryPolicyInterface
     private function exhaust(ConsumeContext $context, ?string $deadQueue, string $exhaustedAction, int $attempt): ConsumeResult
     {
         if ($deadQueue !== null && $deadQueue !== '') {
-            return $this->publishToQueue($context, $deadQueue, $attempt);
+            $policy = $this->normalizePolicy();
+            $exchange = $policy['deadExchange'];
+            return $this->publishToQueue($context, $exchange, $deadQueue, $attempt);
         }
 
         if ($exhaustedAction === 'stop') {
@@ -150,18 +164,19 @@ class ManagedRetryPolicy implements RetryPolicyInterface
 
     /**
      * @param ConsumeContext $context
+     * @param string $exchange
      * @param string $queue
      * @param int $attempt
      * @return ConsumeResult
      * @throws InvalidConfigException
      */
-    private function publishToQueue(ConsumeContext $context, string $queue, int $attempt): ConsumeResult
+    private function publishToQueue(ConsumeContext $context, string $exchange, string $queue, int $attempt): ConsumeResult
     {
         $meta = $context->getMeta();
         $headers = $meta->getHeaders();
         $headers[RetryHeader::NAME] = RetryHeader::sanitize($attempt);
 
-        $properties = $meta->getProperties();
+        $properties = $this->sanitizeRepublishProperties($meta->getProperties());
         if (isset($properties['application_headers'])) {
             unset($properties['application_headers']);
         }
@@ -171,9 +186,20 @@ class ManagedRetryPolicy implements RetryPolicyInterface
             $body = $this->service->getSerializer()->encode($context->getEnvelope());
         }
 
-        $this->service->publish($body, '', $queue, $properties, $headers);
+        $this->service->publish($body, $exchange, $queue, $properties, $headers);
 
         return ConsumeResult::ack();
+    }
+
+    private function sanitizeRepublishProperties(array $properties): array
+    {
+        unset(
+            $properties['application_headers'],
+            $properties['expiration'],
+            $properties['reply_to']
+        );
+
+        return $properties;
     }
 
     private function resolveRetryCount(array $headers, int $maxAttempts): int

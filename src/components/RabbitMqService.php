@@ -2,6 +2,8 @@
 
 namespace illusiard\rabbitmq\components;
 
+use Exception;
+use JsonException;
 use ReflectionException;
 use ReflectionFunction;
 use Throwable;
@@ -202,7 +204,7 @@ class RabbitMqService extends Component
 
             $properties = $env->getProperties();
             unset($properties['application_headers']);
-            $properties['content_type'] = JsonMessageSerializer::CONTENT_TYPE;
+            $properties['content_type'] = $serializer->getContentType();
             $properties['message_id'] = $env->getMessageId();
             if ($env->getCorrelationId() !== null) {
                 $properties['correlation_id'] = $env->getCorrelationId();
@@ -635,17 +637,28 @@ class RabbitMqService extends Component
 
     /**
      * @param array $config
-     *
+     * @param bool $dryRun
      * @return void
      * @throws InvalidConfigException
+     * @throws JsonException
      */
-    public function setupTopology(array $config): void
+    public function setupTopology(array $config, bool $dryRun = false): void
     {
         $topology = (new TopologyBuilder())->buildFromConfig($config);
         $topology->validate();
+        if ($dryRun) {
+            return;
+        }
+
         $this->applyTopology($topology);
     }
 
+    /**
+     * @return Topology
+     * @throws InvalidConfigException
+     * @throws JsonException
+     * @throws ReflectionException
+     */
     public function buildTopology(): Topology
     {
         return (new TopologyBuilder())->buildFromService($this);
@@ -653,13 +666,16 @@ class RabbitMqService extends Component
 
     /**
      * @param Topology $topology
-     * @param bool     $dryRun
+     * @param bool $dryRun
      *
      * @return void
      * @throws InvalidConfigException
+     * @throws Exception
      */
     public function applyTopology(Topology $topology, bool $dryRun = false): void
     {
+        $topology->validate();
+
         $connection = $this->ensureConnection();
         if (!$connection instanceof AmqpConnection) {
             throw new ConnectionException('Topology setup requires AmqpConnection.', ErrorCode::CONNECTION_FAILED);
@@ -710,7 +726,7 @@ class RabbitMqService extends Component
             if ($connection instanceof ConnectionInterface) {
                 try {
                     $connection->close();
-                } catch (Throwable $e) {
+                } catch (Throwable) {
                 }
             }
         }

@@ -5,7 +5,6 @@ namespace illusiard\rabbitmq\tests;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\config\ConfigValidator;
 use illusiard\rabbitmq\exceptions\RabbitMqException;
-use illusiard\rabbitmq\exceptions\ErrorCode;
 
 class ConfigValidatorTest extends TestCase
 {
@@ -46,6 +45,34 @@ class ConfigValidatorTest extends TestCase
                 'port' => 70000,
                 'user' => 'guest',
                 'password' => 'guest',
+            ],
+        ]);
+    }
+
+    public function testInvalidNewTopologyFormatFailsValidation(): void
+    {
+        $validator = new ConfigValidator();
+
+        $this->expectException(RabbitMqException::class);
+        $this->expectExceptionMessage('topology.bindings[0].queue must be a non-empty string.');
+
+        $validator->validate([
+            'amqp' => [
+                'host' => '127.0.0.1',
+                'port' => 5672,
+                'user' => 'guest',
+                'password' => 'guest',
+            ],
+            'topology' => [
+                'exchanges' => [
+                    ['name' => 'orders-ex'],
+                ],
+                'queues' => [
+                    ['name' => 'orders'],
+                ],
+                'bindings' => [
+                    ['exchange' => 'orders-ex', 'routingKey' => 'orders'],
+                ],
             ],
         ]);
     }

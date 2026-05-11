@@ -162,6 +162,22 @@ class TopologyBuilderTest extends TestCase
         (new TopologyBuilder())->buildFromService($service);
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     */
+    public function testBuildFromConfigRejectsMalformedNewFormat(): void
+    {
+        $this->expectException(RabbitMqException::class);
+        $this->expectExceptionMessage('topology.exchanges[0].durable must be a boolean.');
+
+        (new TopologyBuilder())->buildFromConfig([
+            'exchanges' => [
+                ['name' => 'orders-ex', 'durable' => 'false'],
+            ],
+        ]);
+    }
+
     private function indexExchanges(array $exchanges): array
     {
         $indexed = [];

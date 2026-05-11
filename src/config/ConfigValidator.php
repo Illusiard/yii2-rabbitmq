@@ -4,6 +4,7 @@ namespace illusiard\rabbitmq\config;
 
 use illusiard\rabbitmq\exceptions\RabbitMqException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
+use illusiard\rabbitmq\helpers\ArrayHelper;
 
 class ConfigValidator
 {
@@ -63,6 +64,8 @@ class ConfigValidator
         if (isset($config['dead']) && !is_array($config['dead'])) {
             throw new RabbitMqException('topology.dead must be an array.', ErrorCode::TOPOLOGY_INVALID);
         }
+
+        $this->validateTopologyDefinitions($config, $allowedExchangeTypes);
 
         foreach ($config['main'] ?? [] as $index => $item) {
             if (!is_array($item)) {
@@ -126,6 +129,68 @@ class ConfigValidator
         $this->validateBooleanOption($options, 'dryRun', 'topology.options.dryRun', ErrorCode::TOPOLOGY_INVALID);
     }
 
+    private function validateTopologyDefinitions(array $config, array $allowedExchangeTypes): void
+    {
+        foreach (['exchanges', 'exchange', 'queues', 'queue', 'bindings', 'binding'] as $key) {
+            if (isset($config[$key]) && !is_array($config[$key])) {
+                throw new RabbitMqException('topology.' . $key . ' must be an array.', ErrorCode::TOPOLOGY_INVALID);
+            }
+        }
+
+        foreach ($this->normalizeTopologyItems($config, 'exchanges', 'exchange') as $index => $item) {
+            if (!is_array($item)) {
+                throw new RabbitMqException('topology.exchanges[' . $index . '] must be an array.', ErrorCode::TOPOLOGY_INVALID);
+            }
+            $this->requireString($item, 'name', 'topology.exchanges[' . $index . '].name', ErrorCode::TOPOLOGY_INVALID);
+            if (isset($item['type']) && !in_array($item['type'], $allowedExchangeTypes, true)) {
+                throw new RabbitMqException('topology.exchanges[' . $index . '].type must be one of: ' . implode(', ', $allowedExchangeTypes), ErrorCode::TOPOLOGY_INVALID);
+            }
+            $this->validateBooleanOption($item, 'durable', 'topology.exchanges[' . $index . '].durable', ErrorCode::TOPOLOGY_INVALID);
+            $this->validateBooleanOption($item, 'autoDelete', 'topology.exchanges[' . $index . '].autoDelete', ErrorCode::TOPOLOGY_INVALID);
+            $this->validateBooleanOption($item, 'internal', 'topology.exchanges[' . $index . '].internal', ErrorCode::TOPOLOGY_INVALID);
+            if (isset($item['arguments']) && !is_array($item['arguments'])) {
+                throw new RabbitMqException('topology.exchanges[' . $index . '].arguments must be an array.', ErrorCode::TOPOLOGY_INVALID);
+            }
+        }
+
+        foreach ($this->normalizeTopologyItems($config, 'queues', 'queue') as $index => $item) {
+            if (!is_array($item)) {
+                throw new RabbitMqException('topology.queues[' . $index . '] must be an array.', ErrorCode::TOPOLOGY_INVALID);
+            }
+            $this->requireString($item, 'name', 'topology.queues[' . $index . '].name', ErrorCode::TOPOLOGY_INVALID);
+            $this->validateBooleanOption($item, 'durable', 'topology.queues[' . $index . '].durable', ErrorCode::TOPOLOGY_INVALID);
+            $this->validateBooleanOption($item, 'autoDelete', 'topology.queues[' . $index . '].autoDelete', ErrorCode::TOPOLOGY_INVALID);
+            $this->validateBooleanOption($item, 'exclusive', 'topology.queues[' . $index . '].exclusive', ErrorCode::TOPOLOGY_INVALID);
+            if (isset($item['arguments']) && !is_array($item['arguments'])) {
+                throw new RabbitMqException('topology.queues[' . $index . '].arguments must be an array.', ErrorCode::TOPOLOGY_INVALID);
+            }
+        }
+
+        foreach ($this->normalizeTopologyItems($config, 'bindings', 'binding') as $index => $item) {
+            if (!is_array($item)) {
+                throw new RabbitMqException('topology.bindings[' . $index . '] must be an array.', ErrorCode::TOPOLOGY_INVALID);
+            }
+            $this->requireString($item, 'exchange', 'topology.bindings[' . $index . '].exchange', ErrorCode::TOPOLOGY_INVALID);
+            $this->requireString($item, 'queue', 'topology.bindings[' . $index . '].queue', ErrorCode::TOPOLOGY_INVALID);
+            if (isset($item['routingKey']) && !is_string($item['routingKey'])) {
+                throw new RabbitMqException('topology.bindings[' . $index . '].routingKey must be a string.', ErrorCode::TOPOLOGY_INVALID);
+            }
+            if (isset($item['arguments']) && !is_array($item['arguments'])) {
+                throw new RabbitMqException('topology.bindings[' . $index . '].arguments must be an array.', ErrorCode::TOPOLOGY_INVALID);
+            }
+        }
+    }
+
+    private function normalizeTopologyItems(array $config, string $plural, string $singular): array
+    {
+        $items = $config[$plural] ?? $config[$singular] ?? [];
+        if (!is_array($items)) {
+            return [];
+        }
+
+        return ArrayHelper::normalizeItems($items);
+    }
+
     private function validateAmqp(array $config, string $path): void
     {
         $this->requireString($config, 'host', $path . '.host', ErrorCode::CONFIG_INVALID);
@@ -180,10 +245,6 @@ class ConfigValidator
             return;
         }
 
-        if ($config['returnHandler'] === null) {
-            return;
-        }
-
         if (!is_string($config['returnHandler']) && !is_array($config['returnHandler']) && !is_object($config['returnHandler'])) {
             throw new RabbitMqException('returnHandler must be string, array, object, or null.', ErrorCode::CONFIG_INVALID);
         }
@@ -194,10 +255,6 @@ class ConfigValidator
         $this->validateBooleanOption($config, 'returnSinkEnabled', 'returnSinkEnabled', ErrorCode::CONFIG_INVALID);
 
         if (!isset($config['returnSink'])) {
-            return;
-        }
-
-        if ($config['returnSink'] === null) {
             return;
         }
 

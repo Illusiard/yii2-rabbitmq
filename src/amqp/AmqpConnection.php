@@ -2,8 +2,7 @@
 
 namespace illusiard\rabbitmq\amqp;
 
-use illusiard\rabbitmq\exceptions\ErrorCode;
-use illusiard\rabbitmq\exceptions\RabbitMqException;
+use Exception;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use illusiard\rabbitmq\contracts\ConnectionInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;
@@ -21,6 +20,10 @@ class AmqpConnection implements ConnectionInterface
         $this->config = $config;
     }
 
+    /**
+     * @return void
+     * @throws Exception
+     */
     public function connect(): void
     {
         if ($this->connection !== null && $this->connection->isConnected()) {
@@ -57,12 +60,18 @@ class AmqpConnection implements ConnectionInterface
         return $this->connection !== null && $this->connection->isConnected();
     }
 
+    /**
+     * @return void
+     * @throws Exception
+     */
     public function close(): void
     {
         if ($this->connection !== null) {
             $this->connection->close();
             $this->connection = null;
         }
+        $this->publisher = null;
+        $this->consumer = null;
     }
 
     public function getPublisher(): PublisherInterface
@@ -83,6 +92,10 @@ class AmqpConnection implements ConnectionInterface
         return $this->consumer;
     }
 
+    /**
+     * @return AMQPStreamConnection
+     * @throws Exception
+     */
     public function getAmqpConnection(): AMQPStreamConnection
     {
         $this->connect();

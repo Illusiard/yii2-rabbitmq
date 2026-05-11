@@ -56,6 +56,7 @@ class ManagedRetryPolicyTest extends TestCase
 
         $this->assertSame(ConsumeResult::ACTION_ACK, $result->getAction());
         $this->assertCount(1, $service->published);
+        $this->assertSame('retry-exchange', $service->published[0]['exchange']);
         $this->assertSame('retry_1', $service->published[0]['routingKey']);
         $this->assertSame(1, $service->published[0]['headers']['x-retry-count']);
     }
@@ -82,6 +83,7 @@ class ManagedRetryPolicyTest extends TestCase
         $result = $policy->apply(ConsumeResult::retry(), $this->context($service, $headers));
 
         $this->assertSame(ConsumeResult::ACTION_ACK, $result->getAction());
+        $this->assertSame('', $service->published[0]['exchange']);
         $this->assertSame('dead', $service->published[0]['routingKey']);
         $this->assertSame(2, $service->published[0]['headers']['x-retry-count']);
     }
@@ -107,6 +109,7 @@ class ManagedRetryPolicyTest extends TestCase
         $result = $policy->apply(ConsumeResult::retry(), $this->context($service, ['x-retry-count' => '2']));
 
         $this->assertSame(ConsumeResult::ACTION_ACK, $result->getAction());
+        $this->assertSame('retry-exchange', $service->published[0]['exchange']);
         $this->assertSame('retry_1', $service->published[0]['routingKey']);
         $this->assertSame(1, $service->published[0]['headers']['x-retry-count']);
     }
@@ -132,6 +135,7 @@ class ManagedRetryPolicyTest extends TestCase
         $result = $policy->apply(ConsumeResult::retry(), $this->context($service, ['x-retry-count' => 999]));
 
         $this->assertSame(ConsumeResult::ACTION_ACK, $result->getAction());
+        $this->assertSame('', $service->published[0]['exchange']);
         $this->assertSame('dead', $service->published[0]['routingKey']);
         $this->assertSame(4, $service->published[0]['headers']['x-retry-count']);
     }
@@ -178,6 +182,49 @@ class ManagedRetryPolicyTest extends TestCase
 
         $this->assertSame(ConsumeResult::ACTION_STOP, $result->getAction());
         $this->assertCount(0, $service->published);
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testRetryExchangeCanBeConfiguredAndTransientPropertiesAreDropped(): void
+    {
+        $service = new FakeRetryService();
+        $policy = new ManagedRetryPolicy($service, [
+            'managedRetry' => [
+                'enabled' => true,
+                'maxAttempts' => 3,
+                'retryExchange' => 'custom-retry-ex',
+                'retryQueues' => [
+                    ['name' => 'retry_1', 'ttlMs' => 5000],
+                ],
+            ],
+        ]);
+
+        $meta = new MessageMeta(
+            [],
+            [
+                'expiration' => '1',
+                'reply_to' => 'reply.queue',
+                'message_id' => 'msg-1',
+            ],
+            'payload',
+            1,
+            'routing',
+            'exchange',
+            false
+        );
+        $context = new ConsumeContext(new Envelope('payload'), $meta, $service, new RetryTestConsumer());
+
+        $result = $policy->apply(ConsumeResult::retry(), $context);
+
+        $this->assertSame(ConsumeResult::ACTION_ACK, $result->getAction());
+        $this->assertSame('custom-retry-ex', $service->published[0]['exchange']);
+        $this->assertSame('retry_1', $service->published[0]['routingKey']);
+        $this->assertArrayNotHasKey('expiration', $service->published[0]['properties']);
+        $this->assertArrayNotHasKey('reply_to', $service->published[0]['properties']);
+        $this->assertSame('msg-1', $service->published[0]['properties']['message_id']);
     }
 
     private function context(FakeRetryService $service, array $headers): ConsumeContext

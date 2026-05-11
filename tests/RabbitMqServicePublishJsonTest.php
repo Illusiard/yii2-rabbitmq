@@ -8,6 +8,7 @@ use PHPUnit\Framework\MockObject\Exception;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\contracts\PublisherInterface;
+use illusiard\rabbitmq\tests\fixtures\CustomContentTypeSerializer;
 use illusiard\rabbitmq\tests\fixtures\PublisherOnlyConnection;
 use yii\base\InvalidConfigException;
 
@@ -104,7 +105,7 @@ class RabbitMqServicePublishJsonTest extends TestCase
      * @throws Exception
      * @throws InvalidConfigException
      */
-    public function testPublishJsonForcesJsonContentType(): void
+    public function testPublishJsonUsesSerializerContentType(): void
     {
         $captured = [];
 
@@ -118,13 +119,14 @@ class RabbitMqServicePublishJsonTest extends TestCase
         $connection = new PublisherOnlyConnection($publisher);
 
         $service = new RabbitMqService([
+            'serializer' => CustomContentTypeSerializer::class,
             'connectionFactory' => fn(array $config) => $connection,
         ]);
 
-        $service->publishJson(['foo' => 'bar'], 'ex', 'rk', [
+        $service->publishJson('plain body', 'ex', 'rk', [
             'properties' => ['content_type' => 'text/plain'],
         ]);
 
-        $this->assertSame('application/json', $captured['content_type']);
+        $this->assertSame('text/plain', $captured['content_type']);
     }
 }

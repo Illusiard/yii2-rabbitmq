@@ -2,6 +2,8 @@
 
 namespace illusiard\rabbitmq\console;
 
+use Throwable;
+
 class TopologyApplyController extends BaseRabbitMqController
 {
     public bool $dryRun = true;
@@ -25,7 +27,7 @@ class TopologyApplyController extends BaseRabbitMqController
                 $topology->validate();
             }
             $rabbit->applyTopology($topology, $this->dryRun);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->stderr($e->getMessage() . PHP_EOL);
             return 1;
         }

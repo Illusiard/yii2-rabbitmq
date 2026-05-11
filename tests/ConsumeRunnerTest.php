@@ -4,6 +4,7 @@ namespace illusiard\rabbitmq\tests;
 
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 use illusiard\rabbitmq\tests\fixtures\NonHandlerInvokable;
+use illusiard\rabbitmq\tests\fixtures\RunnerDecodeRetryRabbitMqService;
 use illusiard\rabbitmq\tests\fixtures\RunnerLockRabbitMqService;
 use illusiard\rabbitmq\tests\fixtures\RunnerMiddlewareRabbitMqService;
 use illusiard\rabbitmq\tests\fixtures\RunnerRecordingRabbitMqService;
@@ -104,5 +105,32 @@ class ConsumeRunnerTest extends TestCase
             'handler',
             'user-after-reject',
         ], TestRunnerUserMiddleware::$actions);
+    }
+
+    public function testDecodeFailureUsesManagedRetryPolicy(): void
+    {
+        $service = new RunnerDecodeRetryRabbitMqService();
+        $runner = new ConsumeRunner($service);
+
+        $exitCode = $runner->run('queue', function (): bool {
+            return true;
+        }, [
+            'consumeFailFast' => false,
+            'managedRetry' => [
+                'enabled' => true,
+                'maxAttempts' => 3,
+                'retryExchange' => 'retry-ex',
+                'retryQueues' => [
+                    ['name' => 'queue.retry.1', 'ttlMs' => 5000],
+                ],
+                'deadQueue' => 'queue.dead',
+            ],
+        ]);
+
+        $this->assertSame(0, $exitCode);
+        $this->assertCount(1, $service->published);
+        $this->assertSame('retry-ex', $service->published[0]['exchange']);
+        $this->assertSame('queue.retry.1', $service->published[0]['routingKey']);
+        $this->assertSame(1, $service->published[0]['headers']['x-retry-count']);
     }
 }

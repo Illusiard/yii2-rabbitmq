@@ -3,12 +3,13 @@
 namespace illusiard\rabbitmq\topology;
 
 use illusiard\rabbitmq\components\RabbitMqService;
+use illusiard\rabbitmq\config\ConfigValidator;
 use illusiard\rabbitmq\exceptions\ErrorCode;
 use illusiard\rabbitmq\exceptions\RabbitMqException;
 use illusiard\rabbitmq\helpers\ArrayHelper;
+use InvalidArgumentException;
 use JsonException;
 use ReflectionException;
-use Throwable;
 use yii\base\InvalidConfigException;
 
 class TopologyBuilder
@@ -22,6 +23,7 @@ class TopologyBuilder
     {
         $topology = new Topology();
 
+        (new ConfigValidator())->validateTopology($config);
         $this->applyConfig($topology, $config);
 
         return $topology;
@@ -39,6 +41,7 @@ class TopologyBuilder
         $topology = new Topology();
 
         $config = is_array($service->topology ?? null) ? $service->topology : [];
+        (new ConfigValidator())->validateTopology($config);
         $this->applyConfig($topology, $config);
         $this->validateConsumerQueues($topology, $service);
 
@@ -56,8 +59,15 @@ class TopologyBuilder
     {
         try {
             $registry = $service->getConsumerRegistry();
-        } catch (Throwable) {
-            return;
+        } catch (InvalidArgumentException $e) {
+            if (
+                $e->getMessage() === 'Discovery is disabled.'
+                || $e->getMessage() === 'Discovery paths are not configured.'
+            ) {
+                return;
+            }
+
+            throw $e;
         }
 
         foreach ($registry->all() as $fqcn) {

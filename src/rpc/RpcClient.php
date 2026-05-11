@@ -2,13 +2,14 @@
 
 namespace illusiard\rabbitmq\rpc;
 
-use illusiard\rabbitmq\amqp\AmqpConnection;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Wire\AMQPTable;
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\exceptions\RabbitMqException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
+use Throwable;
+use yii\base\InvalidConfigException;
 
 class RpcClient
 {
@@ -21,11 +22,26 @@ class RpcClient
         $this->options = $options;
     }
 
+    /**
+     * @param Envelope $request
+     * @param string $exchange
+     * @param string $routingKey
+     * @param int $timeoutSec
+     * @return Envelope
+     * @throws InvalidConfigException
+     */
     public function call(Envelope $request, string $exchange, string $routingKey, int $timeoutSec = 5): Envelope
     {
-        /** @var AmqpConnection $connection */
         $connection = $this->service->getConnection();
+        if (!method_exists($connection, 'getAmqpConnection')) {
+            throw new RabbitMqException('RPC requires an AMQP connection.', ErrorCode::CONNECTION_FAILED);
+        }
+
         $amqpConnection = $connection->getAmqpConnection();
+        if (!is_object($amqpConnection) || !method_exists($amqpConnection, 'isConnected') || !method_exists($amqpConnection, 'channel')) {
+            throw new RabbitMqException('RPC requires an AMQP connection.', ErrorCode::CONNECTION_FAILED);
+        }
+
         if (!$amqpConnection->isConnected()) {
             throw new RabbitMqException('Dead connection.', ErrorCode::CONNECTION_FAILED);
         }
@@ -34,7 +50,7 @@ class RpcClient
             $channel = $amqpConnection->channel();
             $queueData = $channel->queue_declare('', false, false, true, true);
             $replyQueue = is_array($queueData) ? (string)$queueData[0] : '';
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             throw new RabbitMqException('RPC channel failed: ' . $e->getMessage(), ErrorCode::CHANNEL_FAILED, 0, $e);
         }
 
@@ -90,7 +106,7 @@ class RpcClient
 
                 try {
                     $channel->wait(null, false, $remaining);
-                } catch (AMQPTimeoutException $e) {
+                } catch (AMQPTimeoutException) {
                     break;
                 }
             }
@@ -114,7 +130,7 @@ class RpcClient
     {
         try {
             return bin2hex(random_bytes(16));
-        } catch (\Throwable $e) {
+        } catch (Throwable) {
             return uniqid('rpc_', true);
         }
     }

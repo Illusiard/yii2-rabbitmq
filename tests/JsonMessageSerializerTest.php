@@ -174,6 +174,15 @@ class JsonMessageSerializerTest extends TestCase
         $this->assertTrue($serializer->canDecode($body));
     }
 
+    public function testCanDecodePlainJsonPayload(): void
+    {
+        $serializer = new JsonMessageSerializer();
+
+        $this->assertTrue($serializer->canDecode('{"a":1}'));
+        $this->assertTrue($serializer->canDecode('null'));
+        $this->assertFalse($serializer->canDecode('{invalid json}'));
+    }
+
     /**
      * @return void
      * @throws JsonException

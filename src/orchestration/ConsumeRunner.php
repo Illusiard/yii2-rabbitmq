@@ -185,14 +185,14 @@ class ConsumeRunner
             $core
         );
 
-        return function (string $body, array $meta) use ($runner, $consumer, $classifier): ConsumeResult {
+        return function (string $body, array $meta) use ($runner, $consumer, $classifier, $retryPolicy): ConsumeResult {
             try {
                 $context = $this->buildContext($body, $meta, $consumer);
             } catch (Throwable $e) {
                 $context = $this->buildFallbackContext($body, $meta, $consumer);
                 $result = $classifier->classify($e, $context);
 
-                return $this->finalizeResult($result);
+                return $this->finalizeResult($retryPolicy->apply($result, $context));
             }
 
             return $this->finalizeResult($runner($context));
@@ -260,14 +260,10 @@ class ConsumeRunner
     {
         $middlewares = [];
         $registry = null;
-        try {
-            $registry = $this->service->getMiddlewareRegistry();
-        } catch (Throwable) {
-        }
 
         foreach ($consumer->getMiddlewares() as $middlewareId) {
             if (!is_string($middlewareId)) {
-                continue;
+                throw new InvalidArgumentException('Consumer middleware id must be a string.');
             }
 
             $middlewares[] = $this->instantiateMiddleware(
@@ -294,11 +290,14 @@ class ConsumeRunner
                     continue;
                 }
 
-                if (is_array($middleware) && isset($middleware['id']) && is_string($middleware['id']) && $registry !== null) {
+                if (is_array($middleware) && isset($middleware['id']) && is_string($middleware['id'])) {
                     $middleware['class'] = $this->resolveMiddlewareClass($middleware['id'], $registry);
                     unset($middleware['id']);
                     $middlewares[] = $this->instantiateMiddleware($middleware['class'], $consumer, $handlerClass, $middleware);
+                    continue;
                 }
+
+                throw new InvalidArgumentException('Consume middleware must be a class name or config with class/id.');
             }
         }
 
@@ -316,6 +315,12 @@ class ConsumeRunner
             if ($resolved !== null) {
                 return $resolved;
             }
+        }
+
+        $registry = $this->service->getMiddlewareRegistry();
+        $resolved = $registry->get($middleware);
+        if ($resolved !== null) {
+            return $resolved;
         }
 
         throw new InvalidArgumentException("Middleware not found: $middleware");
