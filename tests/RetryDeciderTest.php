@@ -109,6 +109,25 @@ class RetryDeciderTest extends TestCase
         $this->assertNull($decision->retryQueue);
     }
 
+    public function testRetryCountIsClamped(): void
+    {
+        $decider = new RetryDecider();
+        $decision = $decider->decide([
+            'headers' => [
+                'x-retry-count' => 1000001,
+            ],
+        ], [
+            'maxAttempts' => 1000002,
+            'retryQueues' => [
+                ['name' => 'r1', 'ttlMs' => 1000],
+            ],
+            'deadQueue' => 'dead',
+        ]);
+
+        $this->assertSame('dead', $decision->action);
+        $this->assertSame('dead', $decision->retryQueue);
+    }
+
     public function testRejectsWhenRetryQueuesEmpty(): void
     {
         $decider = new RetryDecider();

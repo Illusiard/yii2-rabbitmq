@@ -5,6 +5,7 @@ namespace illusiard\rabbitmq\consume;
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
+use illusiard\rabbitmq\retry\RetryHeader;
 
 class ManagedRetryPolicy implements RetryPolicyInterface
 {
@@ -29,10 +30,10 @@ class ManagedRetryPolicy implements RetryPolicyInterface
         }
 
         $meta = $context->getMeta();
-        $attempts = $this->resolveRetryCount($meta->getHeaders());
         $maxAttempts = $policy['maxAttempts'];
         $retryQueues = $policy['retryQueues'];
         $deadQueue = $policy['deadQueue'];
+        $attempts = $this->resolveRetryCount($meta->getHeaders(), $maxAttempts);
 
         if (empty($retryQueues)) {
             return $deadQueue ? $this->publishToQueue($context, $deadQueue, $attempts + 1) : ConsumeResult::reject(false);
@@ -95,7 +96,7 @@ class ManagedRetryPolicy implements RetryPolicyInterface
     {
         $meta = $context->getMeta();
         $headers = $meta->getHeaders();
-        $headers['x-retry-count'] = $attempt;
+        $headers[RetryHeader::NAME] = RetryHeader::sanitize($attempt);
 
         $properties = $meta->getProperties();
         if (isset($properties['application_headers'])) {
@@ -112,12 +113,10 @@ class ManagedRetryPolicy implements RetryPolicyInterface
         return ConsumeResult::ack();
     }
 
-    private function resolveRetryCount(array $headers): int
+    private function resolveRetryCount(array $headers, int $maxAttempts): int
     {
-        if (isset($headers['x-retry-count']) && is_int($headers['x-retry-count']) && $headers['x-retry-count'] >= 0) {
-            return $headers['x-retry-count'];
-        }
+        $max = $maxAttempts > 0 ? $maxAttempts : RetryHeader::MAX_RETRY_COUNT;
 
-        return 0;
+        return RetryHeader::sanitize($headers[RetryHeader::NAME] ?? null, $max);
     }
 }

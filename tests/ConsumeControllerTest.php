@@ -76,7 +76,7 @@ class ConsumeControllerTest extends TestCase
 
         file_put_contents(
             $handlerDir . '/RabbitMqHandler.php',
-            "<?php\n\nnamespace app\\queues;\n\nclass RabbitMqHandler\n{\n    public function __invoke(string \$body, array \$meta): bool\n    {\n        return true;\n    }\n}\n"
+            "<?php\n\nnamespace app\\queues;\n\nuse illusiard\\rabbitmq\\definitions\\handler\\HandlerInterface;\nuse illusiard\\rabbitmq\\message\\Envelope;\n\nclass RabbitMqHandler implements HandlerInterface\n{\n    public function handle(Envelope \$envelope): bool\n    {\n        return true;\n    }\n}\n"
         );
 
         $consumerTemplate = <<<'PHP'

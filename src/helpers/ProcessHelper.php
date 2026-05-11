@@ -1,6 +1,6 @@
 <?php
 
-namespace illusiard\rabbitmq\tests\helpers;
+namespace illusiard\rabbitmq\helpers;
 
 use RuntimeException;
 

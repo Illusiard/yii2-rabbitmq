@@ -33,6 +33,20 @@ class JsonMessageSerializerTest extends TestCase
         $serializer->decode('{invalid json}');
     }
 
+    public function testDecodeInvalidJsonDoesNotExposeBodyInException(): void
+    {
+        $serializer = new JsonMessageSerializer();
+        $body = '{"password":"secret"';
+
+        try {
+            $serializer->decode($body);
+            $this->fail('Decode should throw.');
+        } catch (RabbitMqException $e) {
+            $this->assertStringNotContainsString($body, $e->getMessage());
+            $this->assertStringNotContainsString('secret', $e->getMessage());
+        }
+    }
+
     public function testDecodePlainJsonObjectPreservesPayload(): void
     {
         $serializer = new JsonMessageSerializer();
@@ -87,6 +101,15 @@ class JsonMessageSerializerTest extends TestCase
 
         $this->assertSame('msg-2', $decoded->getMessageId());
         $this->assertSame($payload, $decoded->getPayload());
+    }
+
+    public function testCanDecodeEnvelopeJsonStructurally(): void
+    {
+        $serializer = new JsonMessageSerializer();
+
+        $body = "{\n  \"payload\" : {\"a\": 1},\n  \"message_id\" : \"msg-3\"\n}";
+
+        $this->assertTrue($serializer->canDecode($body));
     }
 
     public function testDecodePayloadKeyWithoutIdKeepsWholeObject(): void

@@ -55,11 +55,11 @@ class AmqpConsumer implements ConsumerInterface
             } catch (Throwable $e) {
                 if (!$this->isConnectionException($e) || $attempts >= 3) {
                     $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::CONSUME_FAILED;
-                    Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
+                    Yii::error($code . ' exception=' . get_class($e), 'rabbitmq');
                     throw $e;
                 }
 
-                Yii::warning(ErrorCode::CONNECTION_FAILED . ' Connection lost: ' . $e->getMessage(), 'rabbitmq');
+                Yii::warning(ErrorCode::CONNECTION_FAILED . ' Connection lost: exception=' . get_class($e), 'rabbitmq');
                 $this->connection->close();
                 sleep(1);
             }

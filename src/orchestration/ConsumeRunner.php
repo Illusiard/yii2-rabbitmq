@@ -61,7 +61,7 @@ class ConsumeRunner
 
             return 0;
         } catch (Throwable $e) {
-            Yii::error('Consume runner failed: ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
+            Yii::error('Consume runner failed: exception=' . get_class($e), 'rabbitmq');
             return 1;
         } finally {
             if ($lockFilePath !== null && $runnerOptions->removeLockOnStop) {
@@ -104,7 +104,12 @@ class ConsumeRunner
             return $options->lockFilePath;
         }
 
-        if ($options->lockFileDir === null || $options->lockFileDir === '') {
+        $lockFileDir = $options->lockFileDir;
+        if ($lockFileDir === null || $lockFileDir === '') {
+            $lockFileDir = $this->defaultLockFileDir();
+        }
+
+        if ($lockFileDir === null || $lockFileDir === '') {
             return null;
         }
 
@@ -114,7 +119,22 @@ class ConsumeRunner
             $safe = 'consumer';
         }
 
-        return rtrim($options->lockFileDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $safe . '.lock';
+        return rtrim($lockFileDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $safe . '.lock';
+    }
+
+    private function defaultLockFileDir(): ?string
+    {
+        $runtime = Yii::getAlias('@runtime/rabbitmq', false);
+        if (is_string($runtime) && $runtime !== '') {
+            return $runtime;
+        }
+
+        $cwd = getcwd();
+        if ($cwd === false || $cwd === '') {
+            return null;
+        }
+
+        return $cwd . DIRECTORY_SEPARATOR . 'runtime' . DIRECTORY_SEPARATOR . 'rabbitmq';
     }
 
     private function buildPipelineHandler(string $queue, $handler, array $options): callable
@@ -224,6 +244,12 @@ class ConsumeRunner
     {
         if (is_string($handler)) {
             $handler = Yii::createObject($handler);
+
+            if (!$handler instanceof HandlerInterface) {
+                throw new \InvalidArgumentException(
+                    'String handler must resolve to a class implementing definitions HandlerInterface.'
+                );
+            }
         }
 
         if ($handler instanceof HandlerInterface) {
@@ -231,7 +257,7 @@ class ConsumeRunner
         }
 
         if (!is_callable($handler)) {
-            throw new \InvalidArgumentException('Handler must be callable or implement HandlerInterface.');
+            throw new \InvalidArgumentException('Handler must be a callable or implement definitions HandlerInterface.');
         }
 
         return $handler;

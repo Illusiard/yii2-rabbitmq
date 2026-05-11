@@ -2,7 +2,6 @@
 
 namespace illusiard\rabbitmq\console;
 
-use Closure;
 use Yii;
 use illusiard\rabbitmq\exceptions\FatalException;
 use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
@@ -15,7 +14,6 @@ class ConsumeController extends BaseRabbitMqController
     public ?int      $consumeFailFast             = null;
     public ?string   $fatalExceptionClasses       = null;
     public ?string   $recoverableExceptionClasses = null;
-    private ?Closure $onStart                     = null;
     private ?RunnerOptions $runnerOptions         = null;
     public ?string $readyLock                     = null;
 
@@ -174,11 +172,6 @@ class ConsumeController extends BaseRabbitMqController
         }
 
         return $data;
-    }
-
-    public function setOnStart(?Closure $param): void
-    {
-        $this->onStart = $param;
     }
 
     public function setRunnerOptions(?RunnerOptions $options): void

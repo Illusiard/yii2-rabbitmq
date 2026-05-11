@@ -44,7 +44,7 @@
   },
   "scripts": {
     "test": [
-      "@php vendor/bin/phpunit"
+      "@php vendor/bin/phpunit --bootstrap tests/bootstrap.php tests --exclude-group integration"
     ]
   }
 }

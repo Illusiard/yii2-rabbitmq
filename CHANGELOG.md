@@ -10,10 +10,22 @@
 - TopologyBuilder/TopologyApplier и CLI команды topology-apply/status.
 - ReturnSink и API tick/drainReturns; корреляция confirm по sequence+message_id.
 - Опциональный RabbitMqProfileInterface и merge defaults профиля для definitions.
+- Production `ProcessHelper` рядом с `FileHelper`.
 
 ### Changed
 - Нормализован consume pipeline (ConsumeResult/ExceptionClassifier/RetryPolicy); retry вынесен из AmqpConsumer.
 - Интеграционные тесты используют lock-файл готовности вместо stdout ready.
+- ConsumeRunner по умолчанию использует `runtime/rabbitmq/<consumer-id>.lock`.
+- Topology строится только из topology-конфига сервиса, без consumers/publishers definitions.
+- Envelope detection в JSON serializer переведён на структурную проверку JSON.
+- Строковый handler теперь обязан разрешаться в `HandlerInterface`.
+- `x-retry-count` sanitizes/clamps перед retry decision и перезаписывается при republish.
+- Стандартные consume/error logs больше не включают payload/body, headers/properties или exception message.
 
 ### Fixed
 - Семантика publish (confirm/mandatory) и обработка unroutable.
+- Ошибка JSON decode больше не добавляет исходное тело сообщения в exception message.
+
+### Removed
+- Legacy consumer discovery API с `queue()/handler()/options()`.
+- `onStart` callbacks из consume/RPC ready flow.

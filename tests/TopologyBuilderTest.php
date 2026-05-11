@@ -117,6 +117,52 @@ class TopologyBuilderTest extends TestCase
         $this->assertArrayHasKey('orders.dead', $queues);
     }
 
+    public function testBuildFromServiceIgnoresDefinitionTopology(): void
+    {
+        $service = new class extends \illusiard\rabbitmq\components\RabbitMqService {
+            public function getConsumerRegistry(): \illusiard\rabbitmq\definitions\registry\ConsumerRegistry
+            {
+                return new \illusiard\rabbitmq\definitions\registry\ConsumerRegistry([
+                    'events' => 'app\\services\\rabbitmq\\consumers\\EventsConsumer',
+                ]);
+            }
+
+            public function createConsumerDefinition(string $fqcn): \illusiard\rabbitmq\definitions\consumer\ConsumerInterface
+            {
+                unset($fqcn);
+
+                return new class extends \illusiard\rabbitmq\definitions\consumer\AbstractConsumer {
+                    public function getQueue(): string
+                    {
+                        return 'events';
+                    }
+
+                    public function getHandler()
+                    {
+                        return function (): bool {
+                            return true;
+                        };
+                    }
+
+                    public function getOptions(): array
+                    {
+                        return [
+                            'topology' => [
+                                'exchanges' => [
+                                    ['name' => 'from-definition'],
+                                ],
+                            ],
+                        ];
+                    }
+                };
+            }
+        };
+
+        $topology = (new TopologyBuilder())->buildFromService($service);
+
+        $this->assertTrue($topology->isEmpty());
+    }
+
     private function indexExchanges(array $exchanges): array
     {
         $indexed = [];

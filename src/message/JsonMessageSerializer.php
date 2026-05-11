@@ -40,7 +40,12 @@ class JsonMessageSerializer implements MessageSerializerInterface
             try {
                 $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
             } catch (\JsonException $e) {
-                throw new RabbitMqException('JSON decode failed: ' . $e->getMessage() . ' - ' . $body, ErrorCode::SERIALIZATION_FAILED, 0, $e);
+                throw new RabbitMqException(
+                    'JSON decode failed: ' . $e->getMessage(),
+                    ErrorCode::SERIALIZATION_FAILED,
+                    0,
+                    $e
+                );
             }
         } else {
             $data = json_decode($body, true);
@@ -96,16 +101,18 @@ class JsonMessageSerializer implements MessageSerializerInterface
 
     public function canDecode(string $body, array $meta = []): bool
     {
-        $s = trim($body);
-        if ($s === '') {
+        unset($meta);
+
+        if (trim($body) === '') {
             return false;
         }
 
-        $validJson = (str_starts_with($s, '{') && str_ends_with($s, '}'))
-            || (str_starts_with($s, '[') && str_ends_with($s, ']'));
-        $contained = str_contains($s, '"payload":')
-            && (str_contains($s, '"messageId":') || str_contains($s, '"message_id":'));
+        try {
+            $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            return false;
+        }
 
-        return $validJson && $contained;
+        return is_array($data) && $this->isEnvelopeShape($data);
     }
 }

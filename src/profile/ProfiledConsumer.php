@@ -37,16 +37,6 @@ class ProfiledConsumer implements ConsumerInterface
         return $this->middlewares;
     }
 
-    public function getTopology(): ?array
-    {
-        if (!method_exists($this->consumer, 'getTopology')) {
-            return null;
-        }
-
-        $data = $this->consumer->getTopology();
-        return is_array($data) ? $data : null;
-    }
-
     public function __call(string $name, array $arguments)
     {
         return $this->consumer->{$name}(...$arguments);

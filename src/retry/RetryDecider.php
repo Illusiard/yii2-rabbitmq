@@ -33,12 +33,10 @@ class RetryDecider
     private function resolveAttempts(array $meta): int
     {
         $headers = $meta['headers'] ?? [];
-        if (is_array($headers) && isset($headers['x-retry-count']) && is_int($headers['x-retry-count'])) {
-            if ($headers['x-retry-count'] >= 0) {
-                return $headers['x-retry-count'];
-            }
+        if (!is_array($headers)) {
+            return 0;
         }
 
-        return 0;
+        return RetryHeader::sanitize($headers[RetryHeader::NAME] ?? null);
     }
 }

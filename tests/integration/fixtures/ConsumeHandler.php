@@ -2,13 +2,16 @@
 
 namespace app\tests\integration\fixtures;
 
-class ConsumeHandler
+use illusiard\rabbitmq\definitions\handler\HandlerInterface;
+use illusiard\rabbitmq\message\Envelope;
+
+class ConsumeHandler implements HandlerInterface
 {
-    public function __invoke(string $body, array $meta): bool
+    public function handle(Envelope $envelope): bool
     {
         $logFile = getenv('HANDLER_LOG');
         if (is_string($logFile) && $logFile !== '') {
-            file_put_contents($logFile, $body . PHP_EOL, FILE_APPEND);
+            file_put_contents($logFile, (string)$envelope->getPayload() . PHP_EOL, FILE_APPEND);
         }
 
         $sleepMs = getenv('HANDLER_SLEEP_MS');

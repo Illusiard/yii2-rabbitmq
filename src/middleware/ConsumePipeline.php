@@ -85,6 +85,6 @@ class ConsumePipeline
             . 'queue=' . $queue
             . ' message_id=' . $messageId
             . ' correlation_id=' . $correlationId
-            . ' ' . get_class($e) . ': ' . $e->getMessage();
+            . ' exception=' . get_class($e);
     }
 }

@@ -72,6 +72,48 @@ class ManagedRetryPolicyTest extends TestCase
         $this->assertSame(2, $service->published[0]['headers']['x-retry-count']);
     }
 
+    public function testInvalidRetryCountIsSanitizedToZero(): void
+    {
+        $service = new FakeRetryService();
+        $policy = new ManagedRetryPolicy($service, [
+            'managedRetry' => [
+                'enabled' => true,
+                'maxAttempts' => 3,
+                'retryQueues' => [
+                    ['name' => 'retry_1', 'ttlMs' => 5000],
+                ],
+                'deadQueue' => 'dead',
+            ],
+        ]);
+
+        $result = $policy->apply(ConsumeResult::retry(), $this->context($service, ['x-retry-count' => '2']));
+
+        $this->assertSame(ConsumeResult::ACTION_ACK, $result->getAction());
+        $this->assertSame('retry_1', $service->published[0]['routingKey']);
+        $this->assertSame(1, $service->published[0]['headers']['x-retry-count']);
+    }
+
+    public function testRetryCountIsClampedToMaxAttempts(): void
+    {
+        $service = new FakeRetryService();
+        $policy = new ManagedRetryPolicy($service, [
+            'managedRetry' => [
+                'enabled' => true,
+                'maxAttempts' => 3,
+                'retryQueues' => [
+                    ['name' => 'retry_1', 'ttlMs' => 5000],
+                ],
+                'deadQueue' => 'dead',
+            ],
+        ]);
+
+        $result = $policy->apply(ConsumeResult::retry(), $this->context($service, ['x-retry-count' => 999]));
+
+        $this->assertSame(ConsumeResult::ACTION_ACK, $result->getAction());
+        $this->assertSame('dead', $service->published[0]['routingKey']);
+        $this->assertSame(4, $service->published[0]['headers']['x-retry-count']);
+    }
+
     private function context(FakeRetryService $service, array $headers): ConsumeContext
     {
         $consumer = new class implements ConsumerInterface {

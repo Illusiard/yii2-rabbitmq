@@ -2,7 +2,6 @@
 
 namespace illusiard\rabbitmq\components;
 
-use illusiard\rabbitmq\amqp\AmqpConsumer;
 use ReflectionException;
 use ReflectionFunction;
 use Throwable;
@@ -19,11 +18,8 @@ use illusiard\rabbitmq\config\ConfigValidator;
 use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\message\MessageSerializerInterface;
 use illusiard\rabbitmq\message\JsonMessageSerializer;
-use illusiard\rabbitmq\consume\ExceptionClassifier;
 use illusiard\rabbitmq\middleware\PublishPipeline;
-use illusiard\rabbitmq\middleware\ConsumePipeline;
 use illusiard\rabbitmq\middleware\PublishMiddlewareInterface;
-use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
 use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
 use illusiard\rabbitmq\amqp\LoggingReturnHandler;
 use illusiard\rabbitmq\amqp\InMemoryReturnSink;
@@ -94,7 +90,6 @@ class RabbitMqService extends Component
     private ?PublisherInterface           $publisher             = null;
     private ?MessageSerializerInterface   $serializerInstance    = null;
     private ?PublishPipeline              $publishPipeline       = null;
-    private ?ConsumePipeline              $consumePipeline       = null;
     private ?ReturnHandlerInterface       $returnHandlerInstance = null;
     private ?ReturnSinkInterface          $returnSinkInstance    = null;
     private ?string                       $activeProfile         = null;
@@ -347,31 +342,10 @@ class RabbitMqService extends Component
      */
     public function consume(string $queue, $handler, array $options = []): void
     {
-        $options  = $this->normalizeConsumeOptions($options);
-        $prefetch = $options['prefetch'];
-
-        $handlerClass = $this->resolveHandlerClass($handler);
-        if (is_string($handler)) {
-            $handler = Yii::createObject($handler);
+        $exitCode = $this->createRunner()->run($queue, $handler, $options);
+        if ($exitCode !== 0) {
+            throw new RabbitMqException('Consume failed.', ErrorCode::CONSUME_FAILED);
         }
-        if (!is_callable($handler)) {
-            throw new InvalidArgumentException('Handler must be callable via __invoke.');
-        }
-
-        $context        = $this->buildConsumeContext($queue, $handlerClass);
-        $pipeline       = $this->getConsumePipeline();
-        $wrappedHandler = function (string $body, array $meta) use ($handler, $pipeline, $context) {
-            return $pipeline->run($body, $meta, $context, function (string $body, array $meta) use ($handler) {
-                return $handler($body, $meta);
-            });
-        };
-
-        $consumer = $this->ensureConnection()->getConsumer();
-        if ($consumer instanceof AmqpConsumer) {
-            $consumer->setManagedRetry($this->managedRetry, $this->retryPolicy, $this->getPublisher());
-        }
-
-        $consumer->consume($queue, $wrappedHandler, $prefetch);
     }
 
     public function createRunner(): ConsumeRunner
@@ -502,72 +476,6 @@ class RabbitMqService extends Component
         $this->profileInstance = $profile;
 
         return $this->profileInstance;
-    }
-
-    private function normalizeConsumeOptions(array $options): array
-    {
-        $prefetch = $options['prefetch'] ?? 1;
-
-        if (isset($options['managedRetry'])) {
-            $this->managedRetry = (bool)$options['managedRetry'];
-        }
-
-        if (isset($options['retryPolicy']) && is_array($options['retryPolicy'])) {
-            $this->retryPolicy = $options['retryPolicy'];
-        }
-
-        $pipelineChanged = false;
-        if (isset($options['consumeFailFast'])) {
-            $this->consumeFailFast = (bool)$options['consumeFailFast'];
-            $pipelineChanged       = true;
-        }
-
-        if (isset($options['fatalExceptionClasses']) && is_array($options['fatalExceptionClasses'])) {
-            $this->fatalExceptionClasses = $options['fatalExceptionClasses'];
-            $pipelineChanged             = true;
-        }
-
-        if (isset($options['recoverableExceptionClasses']) && is_array($options['recoverableExceptionClasses'])) {
-            $this->recoverableExceptionClasses = $options['recoverableExceptionClasses'];
-            $pipelineChanged                   = true;
-        }
-
-        $middlewares = $options['consumeMiddlewares'] ?? $options['middlewares'] ?? null;
-        if (is_array($middlewares)) {
-            $this->consumeMiddlewares = $middlewares;
-            $pipelineChanged          = true;
-        }
-
-        if ($pipelineChanged) {
-            $this->consumePipeline = null;
-        }
-
-        return [
-            'prefetch' => (int)$prefetch,
-        ];
-    }
-
-    private function resolveHandlerClass($handler): ?string
-    {
-        if (is_string($handler)) {
-            return $handler;
-        }
-
-        if (is_object($handler)) {
-            return get_class($handler);
-        }
-
-        if (is_array($handler) && isset($handler[0])) {
-            $target = $handler[0];
-            if (is_object($target)) {
-                return get_class($target);
-            }
-            if (is_string($target)) {
-                return $target;
-            }
-        }
-
-        return null;
     }
 
     /**
@@ -988,28 +896,6 @@ class RabbitMqService extends Component
     }
 
     /**
-     * @return ConsumePipeline
-     * @throws InvalidConfigException
-     */
-    private function getConsumePipeline(): ConsumePipeline
-    {
-        if ($this->consumePipeline !== null) {
-            return $this->consumePipeline;
-        }
-
-        $middlewares           =
-            $this->resolveMiddlewares($this->consumeMiddlewares, ConsumeMiddlewareInterface::class);
-        $classifier            = new ExceptionClassifier(
-            $this->consumeFailFast,
-            $this->fatalExceptionClasses,
-            $this->recoverableExceptionClasses
-        );
-        $this->consumePipeline = new ConsumePipeline($middlewares, $classifier);
-
-        return $this->consumePipeline;
-    }
-
-    /**
      * @param array  $configs
      * @param string $interface
      *
@@ -1043,18 +929,6 @@ class RabbitMqService extends Component
             'routingKey'   => $routingKey,
             'queue'        => null,
             'handlerClass' => null,
-            'componentId'  => $this->componentId,
-            'timestamp'    => time(),
-        ];
-    }
-
-    private function buildConsumeContext(string $queue, ?string $handlerClass): array
-    {
-        return [
-            'exchange'     => null,
-            'routingKey'   => null,
-            'queue'        => $queue,
-            'handlerClass' => $handlerClass,
             'componentId'  => $this->componentId,
             'timestamp'    => time(),
         ];
@@ -1119,7 +993,6 @@ class RabbitMqService extends Component
         $this->publisher             = null;
         $this->serializerInstance    = null;
         $this->publishPipeline       = null;
-        $this->consumePipeline       = null;
         $this->returnHandlerInstance = null;
         $this->returnSinkInstance    = null;
         $this->lastError             = null;

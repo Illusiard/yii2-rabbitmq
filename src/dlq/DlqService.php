@@ -150,7 +150,7 @@ class DlqService
                     $count++;
                 } catch (\Throwable $e) {
                     $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::DLQ_FAILED;
-                    Yii::warning($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
+                    Yii::warning($code . ' exception=' . get_class($e), 'rabbitmq');
                     $message->getChannel()->basic_reject($message->getDeliveryTag(), true);
                 }
             }

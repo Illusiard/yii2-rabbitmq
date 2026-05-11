@@ -2,7 +2,6 @@
 
 namespace illusiard\rabbitmq\rpc;
 
-use Closure;
 use illusiard\rabbitmq\amqp\AmqpConnection;
 use PhpAmqpLib\Wire\AMQPTable;
 use Yii;
@@ -14,7 +13,6 @@ use illusiard\rabbitmq\helpers\FileHelper;
 
 class RpcServer
 {
-    private ?Closure $onStart = null;
     private ?string $readyLockFile = null;
 
     private RabbitMqService $service;
@@ -85,7 +83,7 @@ class RpcServer
                     $message->getChannel()->basic_ack($message->getDeliveryTag());
                 } catch (\Throwable $e) {
                     $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::HANDLER_FAILED;
-                    Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
+                    Yii::error($code . ' exception=' . get_class($e), 'rabbitmq');
                     $message->getChannel()->basic_reject($message->getDeliveryTag(), false);
                 }
             }
@@ -97,10 +95,6 @@ class RpcServer
 
         try {
             while ($channel->is_consuming()) {
-                if ($this->onStart) {
-                    ($this->onStart)();
-                    $this->onStart = null;
-                }
                 $channel->wait();
             }
         } finally {
@@ -111,11 +105,6 @@ class RpcServer
                 FileHelper::removeFileQuietly($this->readyLockFile);
             }
         }
-    }
-
-    public function setOnStart(Closure $param): void
-    {
-        $this->onStart = $param;
     }
 
     public function setReadyLockFile(?string $path): void

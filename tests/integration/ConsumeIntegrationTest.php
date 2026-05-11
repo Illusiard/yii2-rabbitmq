@@ -2,7 +2,7 @@
 
 namespace illusiard\rabbitmq\tests\integration;
 
-use illusiard\rabbitmq\tests\helpers\ProcessHelper;
+use illusiard\rabbitmq\helpers\ProcessHelper;
 use illusiard\rabbitmq\amqp\AmqpConnection;
 use illusiard\rabbitmq\amqp\AmqpConsumer;
 use illusiard\rabbitmq\consume\DefaultExceptionClassifier;

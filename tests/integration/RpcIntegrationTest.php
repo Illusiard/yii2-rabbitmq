@@ -5,7 +5,7 @@ namespace illusiard\rabbitmq\tests\integration;
 use illusiard\rabbitmq\rpc\RpcClient;
 use illusiard\rabbitmq\rpc\RpcTimeoutException;
 use illusiard\rabbitmq\message\Envelope;
-use illusiard\rabbitmq\tests\helpers\ProcessHelper;
+use illusiard\rabbitmq\helpers\ProcessHelper;
 
 /**
  * @group integration

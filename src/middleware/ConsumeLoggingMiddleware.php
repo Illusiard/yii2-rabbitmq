@@ -21,7 +21,7 @@ class ConsumeLoggingMiddleware implements ConsumeMiddlewareInterface
             return $result;
         } catch (\Throwable $e) {
             $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::HANDLER_FAILED;
-            Yii::error($code . ' ' . get_class($e) . ': ' . $e->getMessage(), 'rabbitmq');
+            Yii::error($code . ' exception=' . get_class($e), 'rabbitmq');
             throw $e;
         }
     }

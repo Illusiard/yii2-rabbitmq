@@ -3,8 +3,6 @@
 namespace illusiard\rabbitmq\topology;
 
 use illusiard\rabbitmq\components\RabbitMqService;
-use illusiard\rabbitmq\definitions\consumer\ConsumerInterface as DefinitionConsumer;
-use illusiard\rabbitmq\definitions\publisher\PublisherInterface as DefinitionPublisher;
 
 class TopologyBuilder
 {
@@ -24,60 +22,7 @@ class TopologyBuilder
         $config = is_array($service->topology ?? null) ? $service->topology : [];
         $this->applyConfig($topology, $config);
 
-        $this->applyDefinitions($topology, $service);
-
         return $topology;
-    }
-
-    private function applyDefinitions(Topology $topology, RabbitMqService $service): void
-    {
-        try {
-            $consumerRegistry = $service->getConsumerRegistry();
-        } catch (\Throwable $e) {
-            $consumerRegistry = null;
-        }
-
-        try {
-            $publisherRegistry = $service->getPublisherRegistry();
-        } catch (\Throwable $e) {
-            $publisherRegistry = null;
-        }
-
-        if ($consumerRegistry !== null) {
-            foreach ($consumerRegistry->all() as $fqcn) {
-                $instance = $service->createConsumerDefinition($fqcn);
-                if ($instance instanceof DefinitionConsumer) {
-                    $this->applyDefinitionTopology($topology, $instance);
-                }
-            }
-        }
-
-        if ($publisherRegistry !== null) {
-            foreach ($publisherRegistry->all() as $fqcn) {
-                $instance = $service->createPublisherDefinition($fqcn);
-                if ($instance instanceof DefinitionPublisher) {
-                    $this->applyDefinitionTopology($topology, $instance);
-                }
-            }
-        }
-    }
-
-    private function applyDefinitionTopology(Topology $topology, object $definition): void
-    {
-        if (method_exists($definition, 'getTopology')) {
-            $data = $definition->getTopology();
-            if (is_array($data)) {
-                $this->applyConfig($topology, $data);
-                return;
-            }
-        }
-
-        if (method_exists($definition, 'getOptions')) {
-            $options = $definition->getOptions();
-            if (is_array($options) && isset($options['topology']) && is_array($options['topology'])) {
-                $this->applyConfig($topology, $options['topology']);
-            }
-        }
     }
 
     private function applyConfig(Topology $topology, array $config): void

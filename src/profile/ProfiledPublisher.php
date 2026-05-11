@@ -34,21 +34,7 @@ class ProfiledPublisher implements PublisherInterface
 
     public function getRoutingKey(): string
     {
-        if (!method_exists($this->publisher, 'getRoutingKey')) {
-            return '';
-        }
-
-        return (string)$this->publisher->getRoutingKey();
-    }
-
-    public function getTopology(): ?array
-    {
-        if (!method_exists($this->publisher, 'getTopology')) {
-            return null;
-        }
-
-        $data = $this->publisher->getTopology();
-        return is_array($data) ? $data : null;
+        return $this->publisher->getRoutingKey();
     }
 
     public function __call(string $name, array $arguments)
