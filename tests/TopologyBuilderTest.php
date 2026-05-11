@@ -2,13 +2,26 @@
 
 namespace illusiard\rabbitmq\tests;
 
+use Closure;
+use illusiard\rabbitmq\components\RabbitMqService;
+use illusiard\rabbitmq\definitions\consumer\AbstractConsumer;
+use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
+use illusiard\rabbitmq\definitions\registry\ConsumerRegistry;
+use illusiard\rabbitmq\exceptions\RabbitMqException;
+use JsonException;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\topology\TopologyBuilder;
 use illusiard\rabbitmq\topology\ExchangeDefinition;
 use illusiard\rabbitmq\topology\QueueDefinition;
+use ReflectionException;
+use yii\base\InvalidConfigException;
 
 class TopologyBuilderTest extends TestCase
 {
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testBuildFromConfigNewFormat(): void
     {
         $config = [
@@ -64,6 +77,10 @@ class TopologyBuilderTest extends TestCase
         $this->assertSame(['x-match' => 'any'], $bindings[0]->getArguments());
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testBuildFromConfigLegacyFormat(): void
     {
         $config = [
@@ -117,31 +134,39 @@ class TopologyBuilderTest extends TestCase
         $this->assertArrayHasKey('orders.dead', $queues);
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     * @throws ReflectionException
+     * @throws InvalidConfigException
+     */
     public function testBuildFromServiceIgnoresDefinitionTopology(): void
     {
-        $service = new class extends \illusiard\rabbitmq\components\RabbitMqService {
-            public function getConsumerRegistry(): \illusiard\rabbitmq\definitions\registry\ConsumerRegistry
+        $service = new class extends RabbitMqService {
+            public array $topology = [
+                'queues' => [
+                    ['name' => 'events'],
+                ],
+            ];
+
+            public function getConsumerRegistry(): ConsumerRegistry
             {
-                return new \illusiard\rabbitmq\definitions\registry\ConsumerRegistry([
+                return new ConsumerRegistry([
                     'events' => 'app\\services\\rabbitmq\\consumers\\EventsConsumer',
                 ]);
             }
 
-            public function createConsumerDefinition(string $fqcn): \illusiard\rabbitmq\definitions\consumer\ConsumerInterface
+            public function createConsumerDefinition(string $fqcn): ConsumerInterface
             {
-                unset($fqcn);
-
-                return new class extends \illusiard\rabbitmq\definitions\consumer\AbstractConsumer {
+                return new class extends AbstractConsumer {
                     public function getQueue(): string
                     {
                         return 'events';
                     }
 
-                    public function getHandler()
+                    public function getHandler(): Closure
                     {
-                        return function (): bool {
-                            return true;
-                        };
+                        return static fn(): bool => true;
                     }
 
                     public function getOptions(): array
@@ -160,7 +185,45 @@ class TopologyBuilderTest extends TestCase
 
         $topology = (new TopologyBuilder())->buildFromService($service);
 
-        $this->assertTrue($topology->isEmpty());
+        $exchanges = $this->indexExchanges($topology->getExchanges());
+        $this->assertArrayNotHasKey('from-definition', $exchanges);
+        $this->assertTrue($topology->hasQueue('events'));
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws JsonException
+     * @throws ReflectionException
+     */
+    public function testBuildFromServiceValidatesConsumerQueues(): void
+    {
+        $service = new class extends RabbitMqService {
+            public function getConsumerRegistry(): ConsumerRegistry
+            {
+                return new ConsumerRegistry([
+                    'events' => 'app\\services\\rabbitmq\\consumers\\EventsConsumer',
+                ]);
+            }
+
+            public function createConsumerDefinition(string $fqcn): ConsumerInterface
+            {
+                return new class extends AbstractConsumer {
+                    public function getQueue(): string
+                    {
+                        return 'missing-events';
+                    }
+
+                    public function getHandler(): Closure
+                    {
+                        return static fn(): bool => true;
+                    }
+                };
+            }
+        };
+
+        $this->expectException(RabbitMqException::class);
+        (new TopologyBuilder())->buildFromService($service);
     }
 
     private function indexExchanges(array $exchanges): array

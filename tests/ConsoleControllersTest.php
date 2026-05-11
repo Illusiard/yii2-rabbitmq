@@ -2,6 +2,8 @@
 
 namespace illusiard\rabbitmq\tests;
 
+use illusiard\rabbitmq\components\RabbitMqService;
+use JsonException;
 use Yii;
 use PHPUnit\Framework\TestCase;
 use PhpAmqpLib\Wire\AMQPTable;
@@ -21,15 +23,22 @@ use illusiard\rabbitmq\topology\Topology;
 use illusiard\rabbitmq\topology\ExchangeDefinition;
 use illusiard\rabbitmq\topology\QueueDefinition;
 use illusiard\rabbitmq\topology\BindingDefinition;
+use yii\base\InvalidConfigException;
+use yii\di\Container;
 
 class ConsoleControllersTest extends TestCase
 {
     protected function setUp(): void
     {
         parent::setUp();
-        Yii::$container = new \yii\di\Container();
+        Yii::$container = new Container();
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function testDlqInspectJsonOutputIsValidAndNormalized(): void
     {
         $resource = fopen('php://memory', 'rb');
@@ -54,7 +63,7 @@ class ConsoleControllersTest extends TestCase
         $controller = new class('rabbitmq/dlq-inspect', Yii::$app) extends DlqInspectController {
             public string $buffer = '';
 
-            public function stdout($string)
+            public function stdout($string): int
             {
                 $this->buffer .= $string;
                 return strlen($string);
@@ -66,7 +75,7 @@ class ConsoleControllersTest extends TestCase
         $output = trim($controller->buffer);
 
         $this->assertSame(0, $exitCode);
-        $data = json_decode($output, true);
+        $data = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
         $this->assertIsArray($data);
         $this->assertSame('t-1', $data[0]['properties']['application_headers']['x-trace-id']);
         $this->assertNull($data[0]['properties']['stream']);
@@ -106,6 +115,10 @@ class ConsoleControllersTest extends TestCase
         $this->assertSame(1, $exitCode);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testHealthcheckExitCodeDependsOnPing(): void
     {
         $service = new ConsoleTestRabbitMqService();
@@ -180,6 +193,10 @@ class ConsoleControllersTest extends TestCase
         }
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testComponentOverrideIsUsed(): void
     {
         $default = new ConsoleTestRabbitMqService();
@@ -201,6 +218,11 @@ class ConsoleControllersTest extends TestCase
         $this->assertTrue($custom->pingCalled);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function testSetupTopologyPassesDryRunAndStrict(): void
     {
         $service = new ConsoleTestRabbitMqService();
@@ -223,6 +245,32 @@ class ConsoleControllersTest extends TestCase
         $this->assertTrue($service->lastDryRun);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testTopologyApplyDefaultsToDryRun(): void
+    {
+        $service = new ConsoleTestRabbitMqService();
+        $topology = new Topology();
+        $topology->addExchange(new ExchangeDefinition('orders-ex', 'direct'));
+        $topology->addQueue(new QueueDefinition('orders'));
+        $service->buildTopologyReturn = $topology;
+        Yii::$app->set('rabbitmq', $service);
+
+        $controller = new TopologyApplyController('rabbitmq/topology-apply', Yii::$app);
+
+        $exitCode = $controller->actionIndex();
+
+        $this->assertSame(0, $exitCode);
+        $this->assertTrue($service->applyTopologyCalled);
+        $this->assertTrue($service->lastDryRun);
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testTopologyApplyRequiresNonEmptyTopology(): void
     {
         $service = new ConsoleTestRabbitMqService();
@@ -235,6 +283,10 @@ class ConsoleControllersTest extends TestCase
         $this->assertSame(1, $exitCode);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     public function testTopologyStatusRequiresNonEmptyTopology(): void
     {
         $service = new ConsoleTestRabbitMqService();
@@ -263,7 +315,7 @@ class ConsoleTestDlqService
     }
 }
 
-class ConsoleTestRabbitMqService extends \illusiard\rabbitmq\components\RabbitMqService
+class ConsoleTestRabbitMqService extends RabbitMqService
 {
     public array $topology = [];
     public bool $pingResult = true;

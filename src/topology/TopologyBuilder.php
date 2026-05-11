@@ -3,9 +3,20 @@
 namespace illusiard\rabbitmq\topology;
 
 use illusiard\rabbitmq\components\RabbitMqService;
+use illusiard\rabbitmq\exceptions\ErrorCode;
+use illusiard\rabbitmq\exceptions\RabbitMqException;
+use JsonException;
+use ReflectionException;
+use Throwable;
+use yii\base\InvalidConfigException;
 
 class TopologyBuilder
 {
+    /**
+     * @param array $config
+     * @return Topology
+     * @throws JsonException
+     */
     public function buildFromConfig(array $config): Topology
     {
         $topology = new Topology();
@@ -15,16 +26,57 @@ class TopologyBuilder
         return $topology;
     }
 
+    /**
+     * @param RabbitMqService $service
+     * @return Topology
+     * @throws InvalidConfigException
+     * @throws JsonException
+     * @throws ReflectionException
+     */
     public function buildFromService(RabbitMqService $service): Topology
     {
         $topology = new Topology();
 
         $config = is_array($service->topology ?? null) ? $service->topology : [];
         $this->applyConfig($topology, $config);
+        $this->validateConsumerQueues($topology, $service);
 
         return $topology;
     }
 
+    /**
+     * @param Topology $topology
+     * @param RabbitMqService $service
+     * @return void
+     * @throws ReflectionException
+     * @throws InvalidConfigException
+     */
+    private function validateConsumerQueues(Topology $topology, RabbitMqService $service): void
+    {
+        try {
+            $registry = $service->getConsumerRegistry();
+        } catch (Throwable) {
+            return;
+        }
+
+        foreach ($registry->all() as $fqcn) {
+            $consumer = $service->createConsumerDefinition($fqcn);
+            $queue = $consumer->getQueue();
+            if (!$topology->hasQueue($queue)) {
+                throw new RabbitMqException(
+                    "Consumer queue '$queue' is missing from topology.",
+                    ErrorCode::TOPOLOGY_INVALID
+                );
+            }
+        }
+    }
+
+    /**
+     * @param Topology $topology
+     * @param array $config
+     * @return void
+     * @throws JsonException
+     */
     private function applyConfig(Topology $topology, array $config): void
     {
         $exchanges = $config['exchanges'] ?? $config['exchange'] ?? [];
@@ -42,9 +94,9 @@ class TopologyBuilder
             $topology->addExchange(new ExchangeDefinition(
                 $name,
                 isset($item['type']) ? (string)$item['type'] : 'direct',
-                isset($item['durable']) ? (bool)$item['durable'] : true,
-                isset($item['autoDelete']) ? (bool)$item['autoDelete'] : false,
-                isset($item['internal']) ? (bool)$item['internal'] : false,
+                !isset($item['durable']) || $item['durable'],
+                isset($item['autoDelete']) && $item['autoDelete'],
+                isset($item['internal']) && $item['internal'],
                 isset($item['arguments']) && is_array($item['arguments']) ? $item['arguments'] : []
             ));
         }
@@ -59,9 +111,9 @@ class TopologyBuilder
             }
             $topology->addQueue(new QueueDefinition(
                 $name,
-                isset($item['durable']) ? (bool)$item['durable'] : true,
-                isset($item['autoDelete']) ? (bool)$item['autoDelete'] : false,
-                isset($item['exclusive']) ? (bool)$item['exclusive'] : false,
+                !isset($item['durable']) || $item['durable'],
+                isset($item['autoDelete']) && $item['autoDelete'],
+                isset($item['exclusive']) && $item['exclusive'],
                 isset($item['arguments']) && is_array($item['arguments']) ? $item['arguments'] : []
             ));
         }
@@ -92,21 +144,26 @@ class TopologyBuilder
             return [];
         }
 
-        $isAssoc = array_keys($items) !== range(0, count($items) - 1);
-        if ($isAssoc) {
+        if (!array_is_list($items)) {
             return [$items];
         }
 
         return $items;
     }
 
+    /**
+     * @param Topology $topology
+     * @param array $config
+     * @return void
+     * @throws JsonException
+     */
     private function applyLegacyConfig(Topology $topology, array $config): void
     {
         $options = isset($config['options']) && is_array($config['options']) ? $config['options'] : [];
 
         $retryExchange = isset($options['retryExchange']) ? (string)$options['retryExchange'] : 'retry-exchange';
         $retryExchangeType = isset($options['retryExchangeType']) ? (string)$options['retryExchangeType'] : 'direct';
-        $retryExchangeDurable = isset($options['retryExchangeDurable']) ? (bool)$options['retryExchangeDurable'] : true;
+        $retryExchangeDurable = !isset($options['retryExchangeDurable']) || $options['retryExchangeDurable'];
 
         foreach ($this->normalizeItems($config['main'] ?? []) as $item) {
             if (!is_array($item)) {
@@ -121,8 +178,8 @@ class TopologyBuilder
 
             $itemOptions = isset($item['options']) && is_array($item['options']) ? $item['options'] : [];
             $exchangeType = isset($itemOptions['exchangeType']) ? (string)$itemOptions['exchangeType'] : 'direct';
-            $exchangeDurable = isset($itemOptions['exchangeDurable']) ? (bool)$itemOptions['exchangeDurable'] : true;
-            $exchangeAutoDelete = isset($itemOptions['exchangeAutoDelete']) ? (bool)$itemOptions['exchangeAutoDelete'] : false;
+            $exchangeDurable = !isset($itemOptions['exchangeDurable']) || $itemOptions['exchangeDurable'];
+            $exchangeAutoDelete = isset($itemOptions['exchangeAutoDelete']) && $itemOptions['exchangeAutoDelete'];
 
             $deadLetterExchange = $itemOptions['deadLetterExchange'] ?? $itemOptions['retryExchange'] ?? $retryExchange;
             if (!is_string($deadLetterExchange)) {
@@ -163,9 +220,9 @@ class TopologyBuilder
 
             $topology->addQueue(new QueueDefinition(
                 $queue,
-                isset($itemOptions['queueDurable']) ? (bool)$itemOptions['queueDurable'] : true,
-                isset($itemOptions['queueAutoDelete']) ? (bool)$itemOptions['queueAutoDelete'] : false,
-                isset($itemOptions['queueExclusive']) ? (bool)$itemOptions['queueExclusive'] : false,
+                !isset($itemOptions['queueDurable']) || $itemOptions['queueDurable'],
+                isset($itemOptions['queueAutoDelete']) && $itemOptions['queueAutoDelete'],
+                isset($itemOptions['queueExclusive']) && $itemOptions['queueExclusive'],
                 $queueArgs
             ));
 

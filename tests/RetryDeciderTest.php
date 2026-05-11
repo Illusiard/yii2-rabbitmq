@@ -2,6 +2,7 @@
 
 namespace illusiard\rabbitmq\tests;
 
+use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\retry\RetryDecider;
 
@@ -138,11 +139,67 @@ class RetryDeciderTest extends TestCase
         ], [
             'maxAttempts' => 3,
             'retryQueues' => [],
-            'deadQueue' => 'dead',
+            'deadQueue' => null,
         ]);
 
         $this->assertSame('reject', $decision->action);
         $this->assertNull($decision->retryQueue);
+    }
+
+    public function testEmptyRetryQueuesCanDeadLetter(): void
+    {
+        $decider = new RetryDecider();
+        $decision = $decider->decide([
+            'headers' => [
+                'x-retry-count' => 0,
+            ],
+        ], [
+            'maxAttempts' => 3,
+            'retryQueues' => [],
+            'deadQueue' => 'dead',
+        ]);
+
+        $this->assertSame('dead', $decision->action);
+        $this->assertSame('dead', $decision->retryQueue);
+    }
+
+    public function testExhaustedRetryCanStop(): void
+    {
+        $decider = new RetryDecider();
+        $decision = $decider->decide([
+            'headers' => [
+                'x-retry-count' => 3,
+            ],
+        ], [
+            'maxAttempts' => 3,
+            'retryQueues' => [
+                ['name' => 'r1', 'ttlMs' => 1000],
+            ],
+            'exhaustedAction' => 'stop',
+        ]);
+
+        $this->assertSame('stop', $decision->action);
+        $this->assertNull($decision->retryQueue);
+    }
+
+    public function testMaxAttemptsIsRequired(): void
+    {
+        $decider = new RetryDecider();
+
+        $this->expectException(InvalidArgumentException::class);
+        $decider->decide(['headers' => []], ['retryQueues' => []]);
+    }
+
+    public function testExhaustedActionMustBeKnown(): void
+    {
+        $decider = new RetryDecider();
+
+        $this->expectException(InvalidArgumentException::class);
+        $decider->decide(['headers' => []], [
+            'maxAttempts' => 3,
+            'retryQueues' => [],
+            'exhaustedAction' => 'drop',
+        ]);
     }
 
     /**

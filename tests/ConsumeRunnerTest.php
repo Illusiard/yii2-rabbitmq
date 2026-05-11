@@ -2,6 +2,13 @@
 
 namespace illusiard\rabbitmq\tests;
 
+use illusiard\rabbitmq\contracts\ConnectionInterface;
+use illusiard\rabbitmq\contracts\ConsumerInterface;
+use illusiard\rabbitmq\contracts\PublisherInterface;
+use illusiard\rabbitmq\definitions\consume\ConsumeContext;
+use illusiard\rabbitmq\definitions\consume\ConsumeResult;
+use illusiard\rabbitmq\definitions\middleware\MiddlewareInterface;
+use RuntimeException;
 use Yii;
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\orchestration\ConsumeRunner;
@@ -42,10 +49,10 @@ class ConsumeRunnerTest extends TestCase
                 parent::__construct();
             }
 
-            public function getConnection(): \illusiard\rabbitmq\contracts\ConnectionInterface
+            public function getConnection(): ConnectionInterface
             {
                 $lockFile = $this->expectedLockFile;
-                return new class ($lockFile) implements \illusiard\rabbitmq\contracts\ConnectionInterface {
+                return new class ($lockFile) implements ConnectionInterface {
                     private string $lockFile;
 
                     public function __construct(string $lockFile)
@@ -66,15 +73,15 @@ class ConsumeRunnerTest extends TestCase
                     {
                     }
 
-                    public function getPublisher(): \illusiard\rabbitmq\contracts\PublisherInterface
+                    public function getPublisher(): PublisherInterface
                     {
-                        throw new \RuntimeException('Not used in tests.');
+                        throw new RuntimeException('Not used in tests.');
                     }
 
-                    public function getConsumer(): \illusiard\rabbitmq\contracts\ConsumerInterface
+                    public function getConsumer(): ConsumerInterface
                     {
                         $lockFile = $this->lockFile;
-                        return new class ($lockFile) implements \illusiard\rabbitmq\contracts\ConsumerInterface {
+                        return new class ($lockFile) implements ConsumerInterface {
                             private string $lockFile;
 
                             public function __construct(string $lockFile)
@@ -85,10 +92,10 @@ class ConsumeRunnerTest extends TestCase
                             public function consume(string $queue, callable $handler, int $prefetch = 1): void
                             {
                                 if (!is_file($this->lockFile)) {
-                                    throw new \RuntimeException('Lock file missing.');
+                                    throw new RuntimeException('Lock file missing.');
                                 }
 
-                                throw new \RuntimeException('Forced failure.');
+                                throw new RuntimeException('Forced failure.');
                             }
                         };
                     }
@@ -122,10 +129,10 @@ class ConsumeRunnerTest extends TestCase
                 parent::__construct();
             }
 
-            public function getConnection(): \illusiard\rabbitmq\contracts\ConnectionInterface
+            public function getConnection(): ConnectionInterface
             {
                 $lockFile = $this->expectedLockFile;
-                return new class ($lockFile) implements \illusiard\rabbitmq\contracts\ConnectionInterface {
+                return new class ($lockFile) implements ConnectionInterface {
                     private string $lockFile;
 
                     public function __construct(string $lockFile)
@@ -146,15 +153,15 @@ class ConsumeRunnerTest extends TestCase
                     {
                     }
 
-                    public function getPublisher(): \illusiard\rabbitmq\contracts\PublisherInterface
+                    public function getPublisher(): PublisherInterface
                     {
-                        throw new \RuntimeException('Not used in tests.');
+                        throw new RuntimeException('Not used in tests.');
                     }
 
-                    public function getConsumer(): \illusiard\rabbitmq\contracts\ConsumerInterface
+                    public function getConsumer(): ConsumerInterface
                     {
                         $lockFile = $this->lockFile;
-                        return new class ($lockFile) implements \illusiard\rabbitmq\contracts\ConsumerInterface {
+                        return new class ($lockFile) implements ConsumerInterface {
                             private string $lockFile;
 
                             public function __construct(string $lockFile)
@@ -164,12 +171,11 @@ class ConsumeRunnerTest extends TestCase
 
                             public function consume(string $queue, callable $handler, int $prefetch = 1): void
                             {
-                                unset($queue, $handler, $prefetch);
                                 if (!is_file($this->lockFile)) {
-                                    throw new \RuntimeException('Default lock file missing.');
+                                    throw new RuntimeException('Default lock file missing.');
                                 }
 
-                                throw new \RuntimeException('Forced failure.');
+                                throw new RuntimeException('Forced failure.');
                             }
                         };
                     }
@@ -193,11 +199,11 @@ class ConsumeRunnerTest extends TestCase
         $service = new class extends RabbitMqService {
             public bool $consumeCalled = false;
 
-            public function getConnection(): \illusiard\rabbitmq\contracts\ConnectionInterface
+            public function getConnection(): ConnectionInterface
             {
                 $service = $this;
 
-                return new class ($service) implements \illusiard\rabbitmq\contracts\ConnectionInterface {
+                return new class ($service) implements ConnectionInterface {
                     private RabbitMqService $service;
 
                     public function __construct(RabbitMqService $service)
@@ -218,16 +224,16 @@ class ConsumeRunnerTest extends TestCase
                     {
                     }
 
-                    public function getPublisher(): \illusiard\rabbitmq\contracts\PublisherInterface
+                    public function getPublisher(): PublisherInterface
                     {
-                        throw new \RuntimeException('Not used in tests.');
+                        throw new RuntimeException('Not used in tests.');
                     }
 
-                    public function getConsumer(): \illusiard\rabbitmq\contracts\ConsumerInterface
+                    public function getConsumer(): ConsumerInterface
                     {
                         $service = $this->service;
 
-                        return new class ($service) implements \illusiard\rabbitmq\contracts\ConsumerInterface {
+                        return new class ($service) implements ConsumerInterface {
                             private RabbitMqService $service;
 
                             public function __construct(RabbitMqService $service)
@@ -237,7 +243,6 @@ class ConsumeRunnerTest extends TestCase
 
                             public function consume(string $queue, callable $handler, int $prefetch = 1): void
                             {
-                                unset($queue, $handler, $prefetch);
                                 $this->service->consumeCalled = true;
                             }
                         };
@@ -252,6 +257,71 @@ class ConsumeRunnerTest extends TestCase
         $this->assertSame(1, $exitCode);
         $this->assertFalse($service->consumeCalled);
     }
+
+    public function testMiddlewareOrderIsSystemBeforeUserSystemAfter(): void
+    {
+        TestRunnerUserMiddleware::$actions = [];
+
+        $service = new class extends RabbitMqService {
+            public function getConnection(): ConnectionInterface
+            {
+                return new class implements ConnectionInterface {
+                    public function connect(): void
+                    {
+                    }
+
+                    public function isConnected(): bool
+                    {
+                        return false;
+                    }
+
+                    public function close(): void
+                    {
+                    }
+
+                    public function getPublisher(): PublisherInterface
+                    {
+                        throw new RuntimeException('Not used in tests.');
+                    }
+
+                    public function getConsumer(): ConsumerInterface
+                    {
+                        return new class implements ConsumerInterface {
+                            public function consume(string $queue, callable $handler, int $prefetch = 1): void
+                            {
+                                $handler('{"ok":true}', [
+                                    'headers' => [],
+                                    'properties' => [],
+                                    'delivery_tag' => 1,
+                                    'routing_key' => 'routing',
+                                    'exchange' => 'exchange',
+                                    'redelivered' => false,
+                                ]);
+                            }
+                        };
+                    }
+                };
+            }
+        };
+
+        $runner = new ConsumeRunner($service);
+        $exitCode = $runner->run('queue', function (): ConsumeResult {
+            TestRunnerUserMiddleware::$actions[] = 'handler';
+            return ConsumeResult::retry();
+        }, [
+            'managedRetry' => false,
+            'consumeMiddlewares' => [
+                TestRunnerUserMiddleware::class,
+            ],
+        ]);
+
+        $this->assertSame(0, $exitCode);
+        $this->assertSame([
+            'user-before',
+            'handler',
+            'user-after-reject',
+        ], TestRunnerUserMiddleware::$actions);
+    }
 }
 
 class NonHandlerInvokable
@@ -259,5 +329,20 @@ class NonHandlerInvokable
     public function __invoke(): bool
     {
         return true;
+    }
+}
+
+class TestRunnerUserMiddleware implements MiddlewareInterface
+{
+    public static array $actions = [];
+
+    public function process(ConsumeContext $context, callable $next): ConsumeResult
+    {
+        self::$actions[] = 'user-before';
+        $result = $next($context);
+        $normalized = ConsumeResult::normalizeHandlerResult($result);
+        self::$actions[] = 'user-after-' . $normalized->getAction();
+
+        return $normalized;
     }
 }

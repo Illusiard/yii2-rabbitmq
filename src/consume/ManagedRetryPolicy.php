@@ -36,11 +36,11 @@ class ManagedRetryPolicy implements RetryPolicyInterface
         $attempts = $this->resolveRetryCount($meta->getHeaders(), $maxAttempts);
 
         if (empty($retryQueues)) {
-            return $deadQueue ? $this->publishToQueue($context, $deadQueue, $attempts + 1) : ConsumeResult::reject(false);
+            return $this->exhaust($context, $deadQueue, $policy['exhaustedAction'], $attempts + 1);
         }
 
         if ($maxAttempts > 0 && $attempts >= $maxAttempts) {
-            return $deadQueue ? $this->publishToQueue($context, $deadQueue, $attempts + 1) : ConsumeResult::reject(false);
+            return $this->exhaust($context, $deadQueue, $policy['exhaustedAction'], $attempts + 1);
         }
 
         if ($attempts < count($retryQueues)) {
@@ -50,7 +50,7 @@ class ManagedRetryPolicy implements RetryPolicyInterface
             }
         }
 
-        return $deadQueue ? $this->publishToQueue($context, $deadQueue, $attempts + 1) : ConsumeResult::reject(false);
+        return $this->exhaust($context, $deadQueue, $policy['exhaustedAction'], $attempts + 1);
     }
 
     private function normalizePolicy(): array
@@ -61,6 +61,7 @@ class ManagedRetryPolicy implements RetryPolicyInterface
             'maxAttempts' => 0,
             'retryQueues' => [],
             'deadQueue' => null,
+            'exhaustedAction' => 'reject',
         ];
 
         if (is_array($managed)) {
@@ -72,6 +73,12 @@ class ManagedRetryPolicy implements RetryPolicyInterface
             $policy['deadQueue'] = isset($managed['deadQueue']) && is_string($managed['deadQueue'])
                 ? $managed['deadQueue']
                 : null;
+            $policy['exhaustedAction'] = isset($managed['exhaustedAction']) && is_string($managed['exhaustedAction'])
+                ? $managed['exhaustedAction']
+                : 'reject';
+            if ($policy['enabled']) {
+                $this->validateEnabledPolicy($policy);
+            }
             return $policy;
         }
 
@@ -86,10 +93,40 @@ class ManagedRetryPolicy implements RetryPolicyInterface
                 $policy['deadQueue'] = isset($retryPolicy['deadQueue']) && is_string($retryPolicy['deadQueue'])
                     ? $retryPolicy['deadQueue']
                     : null;
+                $policy['exhaustedAction'] = isset($retryPolicy['exhaustedAction']) && is_string($retryPolicy['exhaustedAction'])
+                    ? $retryPolicy['exhaustedAction']
+                    : 'reject';
+            }
+            if ($policy['enabled']) {
+                $this->validateEnabledPolicy($policy);
             }
         }
 
         return $policy;
+    }
+
+    private function validateEnabledPolicy(array $policy): void
+    {
+        if ((int)$policy['maxAttempts'] <= 0) {
+            throw new \InvalidArgumentException('retry policy maxAttempts must be a positive integer.');
+        }
+
+        if (!in_array($policy['exhaustedAction'], ['reject', 'stop'], true)) {
+            throw new \InvalidArgumentException('retry policy exhaustedAction must be reject or stop.');
+        }
+    }
+
+    private function exhaust(ConsumeContext $context, ?string $deadQueue, string $exhaustedAction, int $attempt): ConsumeResult
+    {
+        if ($deadQueue !== null && $deadQueue !== '') {
+            return $this->publishToQueue($context, $deadQueue, $attempt);
+        }
+
+        if ($exhaustedAction === 'stop') {
+            return ConsumeResult::stop();
+        }
+
+        return ConsumeResult::reject(false);
     }
 
     private function publishToQueue(ConsumeContext $context, string $queue, int $attempt): ConsumeResult

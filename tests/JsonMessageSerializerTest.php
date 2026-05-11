@@ -2,13 +2,20 @@
 
 namespace illusiard\rabbitmq\tests;
 
+use JsonException;
 use PHPUnit\Framework\TestCase;
+use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\message\JsonMessageSerializer;
 use illusiard\rabbitmq\exceptions\RabbitMqException;
+use yii\base\InvalidConfigException;
 
 class JsonMessageSerializerTest extends TestCase
 {
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testEncodeDecode(): void
     {
         $serializer = new JsonMessageSerializer();
@@ -25,6 +32,10 @@ class JsonMessageSerializerTest extends TestCase
         $this->assertSame(['h' => 'v'], $decoded->getHeaders());
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testDecodeInvalidJsonThrows(): void
     {
         $serializer = new JsonMessageSerializer();
@@ -33,6 +44,10 @@ class JsonMessageSerializerTest extends TestCase
         $serializer->decode('{invalid json}');
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testDecodeInvalidJsonDoesNotExposeBodyInException(): void
     {
         $serializer = new JsonMessageSerializer();
@@ -47,30 +62,73 @@ class JsonMessageSerializerTest extends TestCase
         }
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testDecodePlainJsonObjectPreservesPayload(): void
     {
         $serializer = new JsonMessageSerializer();
 
         $payload = ['foo' => 'bar', 'count' => 2];
-        $body = json_encode($payload);
+        $body = json_encode($payload, JSON_THROW_ON_ERROR);
 
         $decoded = $serializer->decode($body);
 
         $this->assertSame($payload, $decoded->getPayload());
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     */
+    public function testDecodePlainJsonUsesAmqpMessageId(): void
+    {
+        $serializer = new JsonMessageSerializer();
+
+        $decoded = $serializer->decode('{"foo":"bar"}', [
+            'properties' => [
+                'message_id' => 'amqp-msg-1',
+                'correlation_id' => 'corr-1',
+            ],
+        ]);
+
+        $this->assertSame('amqp-msg-1', $decoded->getMessageId());
+        $this->assertSame('corr-1', $decoded->getCorrelationId());
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testServiceDecodeEnvelopeInvalidJsonThrows(): void
+    {
+        $service = new RabbitMqService();
+
+        $this->expectException(RabbitMqException::class);
+        $service->decodeEnvelope('{invalid json}');
+    }
+
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testDecodePlainJsonArrayPreservesPayload(): void
     {
         $serializer = new JsonMessageSerializer();
 
         $payload = [1, 2, 3];
-        $body = json_encode($payload);
+        $body = json_encode($payload, JSON_THROW_ON_ERROR);
 
         $decoded = $serializer->decode($body);
 
         $this->assertSame($payload, $decoded->getPayload());
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testDecodeEnvelopeJsonWithMessageId(): void
     {
         $serializer = new JsonMessageSerializer();
@@ -79,7 +137,7 @@ class JsonMessageSerializerTest extends TestCase
         $body = json_encode([
             'payload' => $payload,
             'messageId' => 'msg-1',
-        ]);
+        ], JSON_THROW_ON_ERROR);
 
         $decoded = $serializer->decode($body);
 
@@ -87,6 +145,10 @@ class JsonMessageSerializerTest extends TestCase
         $this->assertSame($payload, $decoded->getPayload());
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testDecodeEnvelopeJsonWithMessageIdSnakeCase(): void
     {
         $serializer = new JsonMessageSerializer();
@@ -95,7 +157,7 @@ class JsonMessageSerializerTest extends TestCase
         $body = json_encode([
             'payload' => $payload,
             'message_id' => 'msg-2',
-        ]);
+        ], JSON_THROW_ON_ERROR);
 
         $decoded = $serializer->decode($body);
 
@@ -112,6 +174,10 @@ class JsonMessageSerializerTest extends TestCase
         $this->assertTrue($serializer->canDecode($body));
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testDecodePayloadKeyWithoutIdKeepsWholeObject(): void
     {
         $serializer = new JsonMessageSerializer();
@@ -120,19 +186,23 @@ class JsonMessageSerializerTest extends TestCase
             'payload' => ['c' => 3],
             'extra' => 'value',
         ];
-        $body = json_encode($payload);
+        $body = json_encode($payload, JSON_THROW_ON_ERROR);
 
         $decoded = $serializer->decode($body);
 
         $this->assertSame($payload, $decoded->getPayload());
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testDecodePlainJsonObjectWithoutPayloadKey(): void
     {
         $serializer = new JsonMessageSerializer();
 
         $payload = ['x' => 'y'];
-        $body = json_encode($payload);
+        $body = json_encode($payload, JSON_THROW_ON_ERROR);
 
         $decoded = $serializer->decode($body);
 

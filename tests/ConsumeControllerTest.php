@@ -67,7 +67,7 @@ class ConsumeControllerTest extends TestCase
 
     private function prepareAppConsumers(): void
     {
-        $this->tempRoot = sys_get_temp_dir() . '/rabbitmq_test_' . uniqid();
+        $this->tempRoot = sys_get_temp_dir() . '/rabbitmq_test_' . uniqid('', true);
         $consumerDir = $this->tempRoot . '/services/rabbitmq/consumers';
         $handlerDir = $this->tempRoot . '/queues';
 

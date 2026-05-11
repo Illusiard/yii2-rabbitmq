@@ -34,4 +34,9 @@ class RetryDecision
     {
         return new self('dead', $deadQueue, $reason);
     }
+
+    public static function stop(string $reason = ''): self
+    {
+        return new self('stop', null, $reason);
+    }
 }

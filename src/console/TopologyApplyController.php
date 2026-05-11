@@ -4,7 +4,7 @@ namespace illusiard\rabbitmq\console;
 
 class TopologyApplyController extends BaseRabbitMqController
 {
-    public bool $dryRun = false;
+    public bool $dryRun = true;
     public bool $strict = false;
 
     public function options($actionID): array

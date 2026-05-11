@@ -2,6 +2,7 @@
 
 namespace illusiard\rabbitmq\tests;
 
+use JsonException;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\topology\Topology;
 use illusiard\rabbitmq\topology\ExchangeDefinition;
@@ -38,21 +39,25 @@ class TopologyTest extends TestCase
         }
     }
 
-    public function testDuplicateBindingDefinitionThrows(): void
+    /**
+     * @return void
+     * @throws JsonException
+     */
+    public function testDuplicateBindingDefinitionIsIdempotent(): void
     {
         $topology = new Topology();
         $topology->addExchange(new ExchangeDefinition('ex'));
         $topology->addQueue(new QueueDefinition('q'));
         $topology->addBinding(new BindingDefinition('ex', 'q', 'rk'));
+        $topology->addBinding(new BindingDefinition('ex', 'q', 'rk'));
 
-        try {
-            $topology->addBinding(new BindingDefinition('ex', 'q', 'rk'));
-            $this->fail('Expected topology validation error.');
-        } catch (RabbitMqException $e) {
-            $this->assertSame(ErrorCode::TOPOLOGY_INVALID, $e->getErrorCode());
-        }
+        $this->assertCount(1, $topology->getBindings());
     }
 
+    /**
+     * @return void
+     * @throws JsonException
+     */
     public function testValidationFailsWhenBindingReferencesMissingExchange(): void
     {
         $topology = new Topology();

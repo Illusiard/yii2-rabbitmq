@@ -4,6 +4,7 @@ namespace illusiard\rabbitmq\topology;
 
 use illusiard\rabbitmq\exceptions\RabbitMqException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
+use JsonException;
 
 class Topology
 {
@@ -21,7 +22,7 @@ class Topology
         if (isset($this->exchanges[$name])) {
             $existing = $this->exchanges[$name];
             if (!$this->isSameExchange($existing, $exchange)) {
-                throw new RabbitMqException("Duplicate exchange definition '{$name}'.", ErrorCode::TOPOLOGY_INVALID);
+                throw new RabbitMqException("Duplicate exchange definition '$name'.", ErrorCode::TOPOLOGY_INVALID);
             }
             return;
         }
@@ -34,18 +35,23 @@ class Topology
         if (isset($this->queues[$name])) {
             $existing = $this->queues[$name];
             if (!$this->isSameQueue($existing, $queue)) {
-                throw new RabbitMqException("Duplicate queue definition '{$name}'.", ErrorCode::TOPOLOGY_INVALID);
+                throw new RabbitMqException("Duplicate queue definition '$name'.", ErrorCode::TOPOLOGY_INVALID);
             }
             return;
         }
         $this->queues[$queue->getName()] = $queue;
     }
 
+    /**
+     * @param BindingDefinition $binding
+     * @return void
+     * @throws JsonException
+     */
     public function addBinding(BindingDefinition $binding): void
     {
         $key = $this->bindingKey($binding);
         if (isset($this->bindingKeys[$key])) {
-            throw new RabbitMqException('Duplicate binding definition.', ErrorCode::TOPOLOGY_INVALID);
+            return;
         }
         $this->bindingKeys[$key] = true;
         $this->bindings[] = $binding;
@@ -69,6 +75,11 @@ class Topology
     public function isEmpty(): bool
     {
         return empty($this->exchanges) && empty($this->queues) && empty($this->bindings);
+    }
+
+    public function hasQueue(string $name): bool
+    {
+        return isset($this->queues[$name]);
     }
 
     public function validate(): void
@@ -123,13 +134,18 @@ class Topology
             && $left->getArguments() === $right->getArguments();
     }
 
+    /**
+     * @param BindingDefinition $binding
+     * @return string
+     * @throws JsonException
+     */
     private function bindingKey(BindingDefinition $binding): string
     {
         $args = $this->normalizeArguments($binding->getArguments());
         return $binding->getExchange()
             . '|' . $binding->getQueue()
             . '|' . $binding->getRoutingKey()
-            . '|' . json_encode($args);
+            . '|' . json_encode($args, JSON_THROW_ON_ERROR);
     }
 
     private function normalizeArguments(array $arguments): array

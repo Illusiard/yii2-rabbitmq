@@ -17,8 +17,10 @@ use illusiard\rabbitmq\definitions\handler\HandlerInterface;
 use illusiard\rabbitmq\definitions\middleware\MiddlewareInterface;
 use illusiard\rabbitmq\helpers\FileHelper;
 use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
+use InvalidArgumentException;
 use Throwable;
 use Yii;
+use yii\base\InvalidConfigException;
 
 class ConsumeRunner
 {
@@ -142,7 +144,7 @@ class ConsumeRunner
         $consumer = $this->resolveConsumer($queue, $handler, $options);
         $resolvedHandler = $this->resolveHandler($handler);
         $handlerClass = $this->resolveHandlerClass($resolvedHandler, $handler);
-        $middlewares = $this->resolveMiddlewares($consumer, $options, $handlerClass);
+        $userMiddlewares = $this->resolveMiddlewares($consumer, $options, $handlerClass);
 
         $classifier = $this->buildExceptionClassifier($options);
         $retryPolicy = new ManagedRetryPolicy($this->service, $options);
@@ -150,9 +152,11 @@ class ConsumeRunner
         $pipeline = array_merge(
             [
                 new ExceptionHandlingMiddleware($classifier),
-                new RetryPolicyMiddleware($retryPolicy),
             ],
-            $middlewares
+            $userMiddlewares,
+            [
+                new RetryPolicyMiddleware($retryPolicy),
+            ]
         );
 
         $core = function (ConsumeContext $context) use ($resolvedHandler) {
@@ -168,18 +172,14 @@ class ConsumeRunner
 
         $runner = array_reduce(
             array_reverse($pipeline),
-            function ($next, $middleware) {
-                return function (ConsumeContext $context) use ($middleware, $next) {
-                    return $middleware->process($context, $next);
-                };
-            },
+            static fn($next, $middleware) => static fn(ConsumeContext $context) => $middleware->process($context, $next),
             $core
         );
 
         return function (string $body, array $meta) use ($runner, $consumer, $classifier): ConsumeResult {
             try {
                 $context = $this->buildContext($body, $meta, $consumer);
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 $context = $this->buildFallbackContext($body, $meta, $consumer);
                 $result = $classifier->classify($e, $context);
 
@@ -240,13 +240,18 @@ class ConsumeRunner
         };
     }
 
+    /**
+     * @param $handler
+     * @return callable|HandlerInterface|object|string
+     * @throws InvalidConfigException
+     */
     private function resolveHandler($handler)
     {
         if (is_string($handler)) {
             $handler = Yii::createObject($handler);
 
             if (!$handler instanceof HandlerInterface) {
-                throw new \InvalidArgumentException(
+                throw new InvalidArgumentException(
                     'String handler must resolve to a class implementing definitions HandlerInterface.'
                 );
             }
@@ -257,7 +262,7 @@ class ConsumeRunner
         }
 
         if (!is_callable($handler)) {
-            throw new \InvalidArgumentException('Handler must be a callable or implement definitions HandlerInterface.');
+            throw new InvalidArgumentException('Handler must be a callable or implement definitions HandlerInterface.');
         }
 
         return $handler;
@@ -282,7 +287,7 @@ class ConsumeRunner
         $registry = null;
         try {
             $registry = $this->service->getMiddlewareRegistry();
-        } catch (\Throwable $e) {
+        } catch (Throwable) {
         }
 
         foreach ($consumer->getMiddlewares() as $middlewareId) {
@@ -298,13 +303,13 @@ class ConsumeRunner
             if ($registry !== null) {
                 $fqcn = $registry->get($middlewareId);
                 if ($fqcn === null) {
-                    throw new \InvalidArgumentException("Middleware not found: {$middlewareId}");
+                    throw new InvalidArgumentException("Middleware not found: $middlewareId");
                 }
                 $middlewares[] = $this->instantiateMiddleware($fqcn, $consumer, $handlerClass);
                 continue;
             }
 
-            throw new \InvalidArgumentException("Middleware not found: {$middlewareId}");
+            throw new InvalidArgumentException("Middleware not found: $middlewareId");
         }
 
         $optionMiddlewares = $options['consumeMiddlewares'] ?? $options['middlewares'] ?? [];
@@ -327,7 +332,7 @@ class ConsumeRunner
                 if (is_array($middleware) && isset($middleware['id']) && is_string($middleware['id']) && $registry !== null) {
                     $fqcn = $registry->get($middleware['id']);
                     if ($fqcn === null) {
-                        throw new \InvalidArgumentException("Middleware not found: {$middleware['id']}");
+                        throw new InvalidArgumentException("Middleware not found: {$middleware['id']}");
                     }
                     $middleware['class'] = $fqcn;
                     unset($middleware['id']);
@@ -352,7 +357,7 @@ class ConsumeRunner
             return new LegacyConsumeMiddlewareAdapter($instance, $this->service, $consumer, $handlerClass);
         }
 
-        throw new \InvalidArgumentException('Middleware must implement definitions MiddlewareInterface.');
+        throw new InvalidArgumentException('Middleware must implement definitions MiddlewareInterface.');
     }
 
     private function buildExceptionClassifier(array $options): DefaultExceptionClassifier
@@ -383,6 +388,12 @@ class ConsumeRunner
         return new ConsumeContext($envelope, $messageMeta, $this->service, $consumer, $this->stopRequested);
     }
 
+    /**
+     * @param string $body
+     * @param array $meta
+     * @param ConsumerInterface $consumer
+     * @return ConsumeContext
+     */
     private function buildFallbackContext(string $body, array $meta, ConsumerInterface $consumer): ConsumeContext
     {
         $headers = isset($meta['headers']) && is_array($meta['headers']) ? $meta['headers'] : [];

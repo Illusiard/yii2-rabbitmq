@@ -202,9 +202,7 @@ class RabbitMqService extends Component
 
             $properties = $env->getProperties();
             unset($properties['application_headers']);
-            if (!isset($properties['content_type']) && $serializer instanceof JsonMessageSerializer) {
-                $properties['content_type'] = 'application/json';
-            }
+            $properties['content_type'] = JsonMessageSerializer::CONTENT_TYPE;
             $properties['message_id'] = $env->getMessageId();
             if ($env->getCorrelationId() !== null) {
                 $properties['correlation_id'] = $env->getCorrelationId();
@@ -291,18 +289,7 @@ class RabbitMqService extends Component
      */
     public function decodeEnvelope(string $body, array $meta = []): Envelope
     {
-        $serializer = $this->getSerializer();
-
-        if ($serializer->canDecode($body, $meta)) {
-            return $serializer->decode($body, $meta);
-        }
-
-        $data = json_decode($body, true);
-        if (json_last_error() === JSON_ERROR_NONE) {
-            return new Envelope($data, $meta['headers'] ?? [], $meta['properties'] ?? []);
-        }
-
-        return new Envelope($body, $meta['headers'] ?? [], $meta['properties'] ?? []);
+        return $this->getSerializer()->decode($body, $meta);
     }
 
     /**
@@ -588,9 +575,7 @@ class RabbitMqService extends Component
             return [];
         }
 
-        $defaults = $profile->getMiddlewareDefaults();
-
-        return is_array($defaults) ? $defaults : [];
+        return $profile->getMiddlewareDefaults();
     }
 
     /**
@@ -830,10 +815,6 @@ class RabbitMqService extends Component
             return $this->returnHandlerInstance;
         }
 
-        if ($this->returnHandler === null) {
-            return null;
-        }
-
         if (is_string($this->returnHandler)) {
             $this->returnHandler = ['class' => $this->returnHandler];
         }
@@ -859,10 +840,6 @@ class RabbitMqService extends Component
 
         if ($this->returnSinkInstance !== null) {
             return $this->returnSinkInstance;
-        }
-
-        if ($this->returnSink === null) {
-            return null;
         }
 
         if (is_string($this->returnSink)) {
@@ -897,7 +874,7 @@ class RabbitMqService extends Component
 
     /**
      * @param array  $configs
-     * @param string $interface
+     * @param class-string $interface
      *
      * @return array
      * @throws InvalidConfigException

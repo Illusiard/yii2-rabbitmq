@@ -4,9 +4,12 @@ namespace illusiard\rabbitmq\message;
 
 use illusiard\rabbitmq\exceptions\RabbitMqException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
+use JsonException;
 
 class JsonMessageSerializer implements MessageSerializerInterface
 {
+    public const CONTENT_TYPE = 'application/json';
+
     private bool $throwOnError;
 
     public function __construct(array $config = [])
@@ -14,17 +17,22 @@ class JsonMessageSerializer implements MessageSerializerInterface
         $this->throwOnError = $config['throwOnError'] ?? true;
     }
 
+    /**
+     * @param Envelope $env
+     * @return string
+     * @throws JsonException
+     */
     public function encode(Envelope $env): string
     {
         if ($this->throwOnError) {
             try {
                 return json_encode($env->toArray(), JSON_THROW_ON_ERROR);
-            } catch (\JsonException $e) {
+            } catch (JsonException $e) {
                 throw new RabbitMqException('JSON encode failed: ' . $e->getMessage(), ErrorCode::SERIALIZATION_FAILED, 0, $e);
             }
         }
 
-        $json = json_encode($env->toArray());
+        $json = json_encode($env->toArray(), JSON_THROW_ON_ERROR);
         if ($json === false) {
             throw new RabbitMqException('JSON encode failed: ' . json_last_error_msg(), ErrorCode::SERIALIZATION_FAILED);
         }
@@ -32,14 +40,18 @@ class JsonMessageSerializer implements MessageSerializerInterface
         return $json;
     }
 
+    /**
+     * @param string $body
+     * @param array $meta
+     * @return Envelope
+     * @throws JsonException
+     */
     public function decode(string $body, array $meta = []): Envelope
     {
-        $data = null;
-
         if ($this->throwOnError) {
             try {
                 $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-            } catch (\JsonException $e) {
+            } catch (JsonException $e) {
                 throw new RabbitMqException(
                     'JSON decode failed: ' . $e->getMessage(),
                     ErrorCode::SERIALIZATION_FAILED,
@@ -48,7 +60,7 @@ class JsonMessageSerializer implements MessageSerializerInterface
                 );
             }
         } else {
-            $data = json_decode($body, true);
+            $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
             if ($data === null && json_last_error() !== JSON_ERROR_NONE) {
                 throw new RabbitMqException('JSON decode failed: ' . json_last_error_msg(), ErrorCode::SERIALIZATION_FAILED);
             }
@@ -60,7 +72,15 @@ class JsonMessageSerializer implements MessageSerializerInterface
             }
             $env = Envelope::fromArray($data);
         } else {
-            $env = new Envelope($data);
+            $properties = isset($meta['properties']) && is_array($meta['properties']) ? $meta['properties'] : [];
+            $env = new Envelope(
+                $data,
+                [],
+                [],
+                null,
+                isset($properties['correlation_id']) ? (string)$properties['correlation_id'] : null,
+                isset($properties['message_id']) ? (string)$properties['message_id'] : null
+            );
         }
 
         if (isset($meta['headers']) && is_array($meta['headers']) && empty($env->getHeaders())) {
@@ -101,15 +121,13 @@ class JsonMessageSerializer implements MessageSerializerInterface
 
     public function canDecode(string $body, array $meta = []): bool
     {
-        unset($meta);
-
         if (trim($body) === '') {
             return false;
         }
 
         try {
             $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-        } catch (\JsonException $e) {
+        } catch (JsonException) {
             return false;
         }
 

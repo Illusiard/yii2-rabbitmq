@@ -2,6 +2,8 @@
 
 namespace illusiard\rabbitmq\tests;
 
+use Closure;
+use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\consume\ManagedRetryPolicy;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
@@ -114,6 +116,42 @@ class ManagedRetryPolicyTest extends TestCase
         $this->assertSame(4, $service->published[0]['headers']['x-retry-count']);
     }
 
+    public function testEnabledPolicyRequiresMaxAttempts(): void
+    {
+        $service = new FakeRetryService();
+        $policy = new ManagedRetryPolicy($service, [
+            'managedRetry' => [
+                'enabled' => true,
+                'retryQueues' => [
+                    ['name' => 'retry_1', 'ttlMs' => 5000],
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $policy->apply(ConsumeResult::retry(), $this->context($service, []));
+    }
+
+    public function testExhaustedRetryCanStop(): void
+    {
+        $service = new FakeRetryService();
+        $policy = new ManagedRetryPolicy($service, [
+            'managedRetry' => [
+                'enabled' => true,
+                'maxAttempts' => 1,
+                'retryQueues' => [
+                    ['name' => 'retry_1', 'ttlMs' => 5000],
+                ],
+                'exhaustedAction' => 'stop',
+            ],
+        ]);
+
+        $result = $policy->apply(ConsumeResult::retry(), $this->context($service, ['x-retry-count' => 1]));
+
+        $this->assertSame(ConsumeResult::ACTION_STOP, $result->getAction());
+        $this->assertCount(0, $service->published);
+    }
+
     private function context(FakeRetryService $service, array $headers): ConsumeContext
     {
         $consumer = new class implements ConsumerInterface {
@@ -122,11 +160,9 @@ class ManagedRetryPolicyTest extends TestCase
                 return 'queue';
             }
 
-            public function getHandler()
+            public function getHandler(): Closure
             {
-                return function (): bool {
-                    return false;
-                };
+                return static fn(): bool => false;
             }
 
             public function getOptions(): array

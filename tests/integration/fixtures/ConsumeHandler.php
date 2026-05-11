@@ -1,6 +1,6 @@
 <?php
 
-namespace app\tests\integration\fixtures;
+namespace illusiard\rabbitmq\tests\integration\fixtures;
 
 use illusiard\rabbitmq\definitions\handler\HandlerInterface;
 use illusiard\rabbitmq\message\Envelope;
