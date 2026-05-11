@@ -11,7 +11,7 @@ use illusiard\rabbitmq\consume\ManagedRetryPolicy;
 use illusiard\rabbitmq\consume\RetryPolicyMiddleware;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
-use illusiard\rabbitmq\definitions\consume\MessageMeta;
+use illusiard\rabbitmq\definitions\consume\MessageMetaFactory;
 use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
 use illusiard\rabbitmq\definitions\consumer\RuntimeConsumer;
 use illusiard\rabbitmq\definitions\handler\HandlerInterface;
@@ -168,13 +168,13 @@ class ConsumeRunner
             ]
         );
 
-        $core = function (ConsumeContext $context) use ($resolvedHandler) {
+        $core = static function (ConsumeContext $context) use ($resolvedHandler) {
             if ($resolvedHandler instanceof HandlerInterface) {
                 $result = $resolvedHandler->handle($context->getEnvelope());
                 return ConsumeResult::normalizeHandlerResult($result);
             }
 
-            $meta = $this->messageMetaToArray($context->getMeta());
+            $meta = MessageMetaFactory::toTransportMeta($context->getMeta());
             $result = $resolvedHandler($context->getMeta()->getBody(), $meta);
             return ConsumeResult::normalizeHandlerResult($result);
         };
@@ -358,6 +358,13 @@ class ConsumeRunner
         return new DefaultExceptionClassifier($consumeFailFast, $fatal, $recoverable);
     }
 
+    /**
+     * @param string $body
+     * @param array $meta
+     * @param ConsumerInterface $consumer
+     * @return ConsumeContext
+     * @throws InvalidConfigException
+     */
     private function buildContext(string $body, array $meta, ConsumerInterface $consumer): ConsumeContext
     {
         return $this->createContext($this->service->decodeEnvelope($body, $meta), $body, $meta, $consumer);
@@ -376,19 +383,13 @@ class ConsumeRunner
 
     private function createContext(Envelope $envelope, string $body, array $meta, ConsumerInterface $consumer): ConsumeContext
     {
-        return new ConsumeContext($envelope, $this->buildMessageMeta($body, $meta), $this->service, $consumer, $this->stopRequested);
-    }
-
-    private function buildMessageMeta(string $body, array $meta): MessageMeta
-    {
-        $headers = isset($meta['headers']) && is_array($meta['headers']) ? $meta['headers'] : [];
-        $properties = isset($meta['properties']) && is_array($meta['properties']) ? $meta['properties'] : [];
-        $deliveryTag = isset($meta['delivery_tag']) && is_int($meta['delivery_tag']) ? $meta['delivery_tag'] : null;
-        $routingKey = isset($meta['routing_key']) && is_string($meta['routing_key']) ? $meta['routing_key'] : null;
-        $exchange = isset($meta['exchange']) && is_string($meta['exchange']) ? $meta['exchange'] : null;
-        $redelivered = isset($meta['redelivered']) ? (bool)$meta['redelivered'] : false;
-
-        return new MessageMeta($headers, $properties, $body, $deliveryTag, $routingKey, $exchange, $redelivered);
+        return new ConsumeContext(
+            $envelope,
+            MessageMetaFactory::fromTransportMeta($body, $meta),
+            $this->service,
+            $consumer,
+            $this->stopRequested
+        );
     }
 
     private function finalizeResult($result): ConsumeResult
@@ -401,16 +402,4 @@ class ConsumeRunner
         return $normalized;
     }
 
-    private function messageMetaToArray(MessageMeta $meta): array
-    {
-        return [
-            'body' => $meta->getBody(),
-            'delivery_tag' => $meta->getDeliveryTag(),
-            'routing_key' => $meta->getRoutingKey(),
-            'exchange' => $meta->getExchange(),
-            'redelivered' => $meta->isRedelivered(),
-            'headers' => $meta->getHeaders(),
-            'properties' => $meta->getProperties(),
-        ];
-    }
 }

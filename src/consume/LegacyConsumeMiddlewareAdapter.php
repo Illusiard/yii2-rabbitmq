@@ -5,10 +5,11 @@ namespace illusiard\rabbitmq\consume;
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\definitions\consume\ConsumeContext;
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
-use illusiard\rabbitmq\definitions\consume\MessageMeta;
+use illusiard\rabbitmq\definitions\consume\MessageMetaFactory;
 use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
 use illusiard\rabbitmq\definitions\middleware\MiddlewareInterface;
 use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
+use yii\base\InvalidConfigException;
 
 class LegacyConsumeMiddlewareAdapter implements MiddlewareInterface
 {
@@ -29,9 +30,9 @@ class LegacyConsumeMiddlewareAdapter implements MiddlewareInterface
         $this->handlerClass = $handlerClass;
     }
 
-    public function process(ConsumeContext $context, callable $next)
+    public function process(ConsumeContext $context, callable $next): ConsumeResult
     {
-        $meta = $this->buildLegacyMeta($context->getMeta());
+        $meta = MessageMetaFactory::toTransportMeta($context->getMeta());
         $legacyContext = [
             'exchange' => null,
             'routingKey' => null,
@@ -53,31 +54,16 @@ class LegacyConsumeMiddlewareAdapter implements MiddlewareInterface
         return ConsumeResult::normalizeHandlerResult($result);
     }
 
-    private function buildLegacyMeta(MessageMeta $meta): array
-    {
-        return [
-            'body' => $meta->getBody(),
-            'delivery_tag' => $meta->getDeliveryTag(),
-            'routing_key' => $meta->getRoutingKey(),
-            'exchange' => $meta->getExchange(),
-            'redelivered' => $meta->isRedelivered(),
-            'headers' => $meta->getHeaders(),
-            'properties' => $meta->getProperties(),
-        ];
-    }
-
+    /**
+     * @param string $body
+     * @param array $meta
+     * @return ConsumeContext
+     * @throws InvalidConfigException
+     */
     private function buildContext(string $body, array $meta): ConsumeContext
     {
-        $headers = isset($meta['headers']) && is_array($meta['headers']) ? $meta['headers'] : [];
-        $properties = isset($meta['properties']) && is_array($meta['properties']) ? $meta['properties'] : [];
-        $deliveryTag = isset($meta['delivery_tag']) && is_int($meta['delivery_tag']) ? $meta['delivery_tag'] : null;
-        $routingKey = isset($meta['routing_key']) && is_string($meta['routing_key']) ? $meta['routing_key'] : null;
-        $exchange = isset($meta['exchange']) && is_string($meta['exchange']) ? $meta['exchange'] : null;
-        $redelivered = isset($meta['redelivered']) ? (bool)$meta['redelivered'] : false;
-
-        $messageMeta = new MessageMeta($headers, $properties, $body, $deliveryTag, $routingKey, $exchange, $redelivered);
         $envelope = $this->service->decodeEnvelope($body, $meta);
 
-        return new ConsumeContext($envelope, $messageMeta, $this->service, $this->consumer);
+        return new ConsumeContext($envelope, MessageMetaFactory::fromTransportMeta($body, $meta), $this->service, $this->consumer);
     }
 }

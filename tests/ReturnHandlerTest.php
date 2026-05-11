@@ -17,6 +17,7 @@ class ReturnHandlerTest extends TestCase
     public function testReturnHandlerReceivesReturnedMessage(): void
     {
         $handler = new RecordingReturnHandler();
+        /** @var callable|null $returnListener */
         $returnListener = null;
 
         $channel = $this->getMockBuilder(AMQPChannel::class)
@@ -50,7 +51,7 @@ class ReturnHandlerTest extends TestCase
             'x-trace-id' => 't-1',
         ]);
 
-        $this->assertNotNull($returnListener);
+        $this->assertIsCallable($returnListener);
 
         $message = new AMQPMessage('payload', [
             'message_id' => 'msg-1',
