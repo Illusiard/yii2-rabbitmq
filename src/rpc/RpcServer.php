@@ -19,10 +19,12 @@ class RpcServer
     private ?string $readyLockFile = null;
 
     private RabbitMqService $service;
+    private RpcAmqpConnectionResolver $connectionResolver;
 
     public function __construct(RabbitMqService $service)
     {
         $this->service = $service;
+        $this->connectionResolver = new RpcAmqpConnectionResolver();
     }
 
     /**
@@ -42,19 +44,7 @@ class RpcServer
             throw new InvalidArgumentException('Handler must be callable and return Envelope.');
         }
 
-        $connection = $this->service->getConnection();
-        if (!method_exists($connection, 'getAmqpConnection')) {
-            throw new RabbitMqException('RPC requires an AMQP connection.', ErrorCode::CONNECTION_FAILED);
-        }
-
-        $amqpConnection = $connection->getAmqpConnection();
-        if (!is_object($amqpConnection) || !method_exists($amqpConnection, 'isConnected') || !method_exists($amqpConnection, 'channel')) {
-            throw new RabbitMqException('RPC requires an AMQP connection.', ErrorCode::CONNECTION_FAILED);
-        }
-
-        if (!$amqpConnection->isConnected()) {
-            throw new RabbitMqException('Dead connection.', ErrorCode::CONNECTION_FAILED);
-        }
+        $amqpConnection = $this->connectionResolver->resolve($this->service);
 
         $channel = $amqpConnection->channel();
         $channel->basic_consume(

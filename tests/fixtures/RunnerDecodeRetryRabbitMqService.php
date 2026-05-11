@@ -8,6 +8,6 @@ class RunnerDecodeRetryRabbitMqService extends FakeRetryService
 {
     public function getConnection(): ConnectionInterface
     {
-        return new RunnerDecodeRetryConnection($this);
+        return new RunnerDecodeRetryConnection();
     }
 }

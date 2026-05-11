@@ -9,13 +9,6 @@ use RuntimeException;
 
 class RunnerDecodeRetryConnection implements ConnectionInterface
 {
-    private FakeRetryService $service;
-
-    public function __construct(FakeRetryService $service)
-    {
-        $this->service = $service;
-    }
-
     public function connect(): void
     {
     }

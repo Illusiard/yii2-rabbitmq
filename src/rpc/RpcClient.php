@@ -14,12 +14,12 @@ use yii\base\InvalidConfigException;
 class RpcClient
 {
     private RabbitMqService $service;
-    private array $options;
+    private RpcAmqpConnectionResolver $connectionResolver;
 
-    public function __construct(RabbitMqService $service, array $options = [])
+    public function __construct(RabbitMqService $service)
     {
         $this->service = $service;
-        $this->options = $options;
+        $this->connectionResolver = new RpcAmqpConnectionResolver();
     }
 
     /**
@@ -32,19 +32,7 @@ class RpcClient
      */
     public function call(Envelope $request, string $exchange, string $routingKey, int $timeoutSec = 5): Envelope
     {
-        $connection = $this->service->getConnection();
-        if (!method_exists($connection, 'getAmqpConnection')) {
-            throw new RabbitMqException('RPC requires an AMQP connection.', ErrorCode::CONNECTION_FAILED);
-        }
-
-        $amqpConnection = $connection->getAmqpConnection();
-        if (!is_object($amqpConnection) || !method_exists($amqpConnection, 'isConnected') || !method_exists($amqpConnection, 'channel')) {
-            throw new RabbitMqException('RPC requires an AMQP connection.', ErrorCode::CONNECTION_FAILED);
-        }
-
-        if (!$amqpConnection->isConnected()) {
-            throw new RabbitMqException('Dead connection.', ErrorCode::CONNECTION_FAILED);
-        }
+        $amqpConnection = $this->connectionResolver->resolve($this->service);
 
         try {
             $channel = $amqpConnection->channel();
