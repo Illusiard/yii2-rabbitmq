@@ -2,7 +2,9 @@
 
 namespace illusiard\rabbitmq\definitions\discovery;
 
+use JsonException;
 use Yii;
+use yii\base\InvalidConfigException;
 use yii\caching\CacheInterface;
 use illusiard\rabbitmq\definitions\registry\ConsumerRegistry;
 use illusiard\rabbitmq\definitions\registry\PublisherRegistry;
@@ -21,26 +23,53 @@ class DefinitionsDiscovery
         $this->engine = $engine ?? new DiscoveryEngine();
     }
 
+    /**
+     * @return ConsumerRegistry
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function discoverConsumers(): ConsumerRegistry
     {
         return $this->discoverRegistry(new ConsumerRegistry(), 'consumers');
     }
 
+    /**
+     * @return PublisherRegistry
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function discoverPublishers(): PublisherRegistry
     {
         return $this->discoverRegistry(new PublisherRegistry(), 'publishers');
     }
 
+    /**
+     * @return MiddlewareRegistry
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function discoverMiddlewares(): MiddlewareRegistry
     {
         return $this->discoverRegistry(new MiddlewareRegistry(), 'middlewares');
     }
 
+    /**
+     * @return HandlerRegistry
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function discoverHandlers(): HandlerRegistry
     {
         return $this->discoverRegistry(new HandlerRegistry(), 'handlers');
     }
 
+    /**
+     * @param DefinitionRegistry $registry
+     * @param string $type
+     * @return DefinitionRegistry
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     private function discoverRegistry(DefinitionRegistry $registry, string $type): DefinitionRegistry
     {
         $paths = $this->config->getPaths();
@@ -68,11 +97,11 @@ class DefinitionsDiscovery
                 continue;
             }
 
-            try {
-                $registry->register($fqcn);
-            } catch (\Throwable $e) {
-                throw $e;
+            if (!$registry->accepts($fqcn)) {
+                continue;
             }
+
+            $registry->register($fqcn);
         }
 
         if ($cache instanceof CacheInterface) {
@@ -82,6 +111,10 @@ class DefinitionsDiscovery
         return $registry;
     }
 
+    /**
+     * @return ?CacheInterface
+     * @throws InvalidConfigException
+     */
     private function resolveCache(): ?CacheInterface
     {
         $cacheId = $this->config->getCacheId();
@@ -97,6 +130,12 @@ class DefinitionsDiscovery
         return $cache instanceof CacheInterface ? $cache : null;
     }
 
+    /**
+     * @param string $type
+     * @param array $paths
+     * @return string
+     * @throws JsonException
+     */
     private function buildCacheKey(string $type, array $paths): string
     {
         $payload = [
@@ -105,6 +144,6 @@ class DefinitionsDiscovery
             'version' => DiscoveryEngine::CACHE_VERSION,
         ];
 
-        return 'rabbitmq.definitions.' . sha1(json_encode($payload));
+        return 'rabbitmq.definitions.' . sha1(json_encode($payload, JSON_THROW_ON_ERROR));
     }
 }

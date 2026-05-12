@@ -38,9 +38,16 @@
 - Runtime retryExchange синхронизирован с topology: `topology.options.retryExchange` является источником истины.
 - `x-retry-count` при exhausted retry больше не превышает `maxAttempts`.
 - RetryPolicy теперь строго валидирует `maxAttempts` и `retryQueues[]` до запуска consumer.
+- Discovery корректно работает с multi-path конфигурацией для consumers/publishers/middlewares/handlers.
+- Topology dry-run валидирует topology offline, без подключения к брокеру.
+- Component-level consume middleware больше не дублируются в pipeline.
+- `setupTopology()` валидирует очереди discovered consumers.
+- `JsonMessageSerializer` всегда заворачивает ошибки JSON encode/decode в `RabbitMqException`.
+- README topology notes обновлены под текущую dry-run/strict семантику.
 
 ### Removed
 - Legacy consumer discovery API с `queue()/handler()/options()`.
 - `onStart` callbacks из consume/RPC ready flow.
 - Дублирующий `SetupTopologyController`; остается `TopologyApplyController`.
 - Пустой `AbstractHandler`; контракт задает `HandlerInterface`.
+- Опция `throwOnError` у `JsonMessageSerializer`; ошибки сериализации всегда package-level.

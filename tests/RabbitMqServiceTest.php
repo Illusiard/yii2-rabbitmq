@@ -5,11 +5,17 @@ namespace illusiard\rabbitmq\tests;
 use JsonException;
 use PHPUnit\Framework\MockObject\Exception;
 use PHPUnit\Framework\TestCase;
+use ReflectionException;
 use RuntimeException;
 use Yii;
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\contracts\ConnectionInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;
+use illusiard\rabbitmq\exceptions\RabbitMqException;
+use illusiard\rabbitmq\tests\fixtures\TopologyBuilderServiceWithMissingConsumerQueue;
+use illusiard\rabbitmq\topology\ExchangeDefinition;
+use illusiard\rabbitmq\topology\QueueDefinition;
+use illusiard\rabbitmq\topology\Topology;
 use yii\base\InvalidConfigException;
 
 class RabbitMqServiceTest extends TestCase
@@ -79,6 +85,7 @@ class RabbitMqServiceTest extends TestCase
      * @return void
      * @throws InvalidConfigException
      * @throws JsonException
+     * @throws ReflectionException
      */
     public function testSetupTopologyDryRunOnlyValidates(): void
     {
@@ -103,5 +110,47 @@ class RabbitMqServiceTest extends TestCase
         ], true);
 
         $this->assertSame(0, $factoryCalls);
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testApplyTopologyDryRunDoesNotCreateConnection(): void
+    {
+        $factoryCalls = 0;
+        $service = new RabbitMqService([
+            'connectionFactory' => function (array $config) use (&$factoryCalls) {
+                $factoryCalls++;
+                throw new RuntimeException('Connection must not be created for applyTopology dry-run.');
+            },
+        ]);
+        $topology = new Topology();
+        $topology->addExchange(new ExchangeDefinition('orders-ex'));
+        $topology->addQueue(new QueueDefinition('orders'));
+
+        $service->applyTopology($topology, true);
+
+        $this->assertSame(0, $factoryCalls);
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws JsonException
+     * @throws ReflectionException
+     */
+    public function testSetupTopologyValidatesDiscoveredConsumerQueues(): void
+    {
+        $service = new TopologyBuilderServiceWithMissingConsumerQueue();
+
+        $this->expectException(RabbitMqException::class);
+        $this->expectExceptionMessage("Consumer queue 'missing-events'");
+
+        $service->setupTopology([
+            'queues' => [
+                ['name' => 'events'],
+            ],
+        ], true);
     }
 }

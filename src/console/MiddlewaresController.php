@@ -2,14 +2,19 @@
 
 namespace illusiard\rabbitmq\console;
 
+use Throwable;
+
 class MiddlewaresController extends BaseRabbitMqController
 {
     public function actionIndex(): int
     {
         try {
             $registry = $this->getRabbitService()->getMiddlewareRegistry();
-        } catch (\Throwable $e) {
-            $this->stderr("Discovery is disabled; enable it to list middlewares.\n");
+        } catch (Throwable $e) {
+            $message = $this->isDiscoveryUnavailable($e)
+                ? 'Discovery is disabled; enable it to list middlewares.'
+                : $e->getMessage();
+            $this->stderr($message . PHP_EOL);
             return 1;
         }
 

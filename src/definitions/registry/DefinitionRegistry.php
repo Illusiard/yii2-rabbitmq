@@ -25,21 +25,26 @@ abstract class DefinitionRegistry
     public function register(string $fqcn): void
     {
         if (!class_exists($fqcn)) {
-            throw new InvalidArgumentException("Class '{$fqcn}' not found.");
+            throw new InvalidArgumentException("Class '$fqcn' not found.");
         }
 
         if (!is_subclass_of($fqcn, $this->interface)) {
-            throw new InvalidArgumentException("Class '{$fqcn}' must implement {$this->interface}.");
+            throw new InvalidArgumentException("Class '$fqcn' must implement $this->interface.");
         }
 
         $id = DefinitionIdDeriver::derive($fqcn, $this->suffix);
         if (isset($this->items[$id])) {
             throw new DuplicateDefinitionIdException(
-                "Duplicate {$this->type} id '{$id}' for classes '{$this->items[$id]}' and '{$fqcn}'."
+                "Duplicate $this->type id '$id' for classes '{$this->items[$id]}' and '$fqcn'."
             );
         }
 
         $this->items[$id] = $fqcn;
+    }
+
+    public function accepts(string $fqcn): bool
+    {
+        return class_exists($fqcn) && is_subclass_of($fqcn, $this->interface);
     }
 
     public function get(string $id): ?string

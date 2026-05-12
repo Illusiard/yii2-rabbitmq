@@ -2,10 +2,15 @@
 
 namespace illusiard\rabbitmq\console;
 
+use InvalidArgumentException;
+use JsonException;
+use ReflectionException;
+use Throwable;
 use Yii;
 use illusiard\rabbitmq\exceptions\FatalException;
 use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
 use illusiard\rabbitmq\orchestration\RunnerOptions;
+use yii\base\InvalidConfigException;
 
 class ConsumeController extends BaseRabbitMqController
 {
@@ -36,6 +41,14 @@ class ConsumeController extends BaseRabbitMqController
         ]);
     }
 
+    /**
+     * @param string $consumerId
+     * @param int $memoryLimitMb
+     * @return int
+     * @throws InvalidConfigException
+     * @throws JsonException
+     * @throws ReflectionException
+     */
     public function actionIndex(string $consumerId, int $memoryLimitMb = 256): int
     {
         $memoryLimitBytes  = $memoryLimitMb * 1024 * 1024;
@@ -44,14 +57,17 @@ class ConsumeController extends BaseRabbitMqController
             $rabbit = $this->getRabbitService();
             try {
                 $registry = $rabbit->getConsumerRegistry();
-            } catch (\Throwable $e) {
-                $this->stderr("Discovery is disabled; enable it to run consumers by id.\n");
+            } catch (Throwable $e) {
+                $message = $this->isDiscoveryUnavailable($e)
+                    ? 'Discovery is disabled; enable it to run consumers by id.'
+                    : $e->getMessage();
+                $this->stderr($message . PHP_EOL);
                 return 1;
             }
 
             $consumerClass = $registry->get($consumerId);
             if ($consumerClass === null) {
-                $this->stderr("Consumer not found: {$consumerId}\n");
+                $this->stderr("Consumer not found: $consumerId\n");
 
                 return 1;
             }
@@ -59,11 +75,6 @@ class ConsumeController extends BaseRabbitMqController
             $consumerInstance = $rabbit->createConsumerDefinition($consumerClass);
 
             $optionsRaw = $consumerInstance->getOptions();
-            if (!is_array($optionsRaw)) {
-                $this->stderr("Consumer options must be an array.\n");
-
-                return 1;
-            }
 
             $options = $this->buildConsumeOptions($optionsRaw, $memoryLimitBytes);
 
@@ -88,17 +99,24 @@ class ConsumeController extends BaseRabbitMqController
             return 1;
         }
 
-        return $exitCode ?? 0;
+        return $exitCode;
     }
 
+    /**
+     * @return int
+     * @throws InvalidConfigException
+     */
     public function actionConsumers(): int
     {
         $rabbit = $this->getRabbitService();
 
         try {
             $registry = $rabbit->getConsumerRegistry();
-        } catch (\Throwable $e) {
-            $this->stderr("Discovery is disabled; enable it to list consumers.\n");
+        } catch (Throwable $e) {
+            $message = $this->isDiscoveryUnavailable($e)
+                ? 'Discovery is disabled; enable it to list consumers.'
+                : $e->getMessage();
+            $this->stderr($message . PHP_EOL);
             return 1;
         }
 
@@ -117,6 +135,12 @@ class ConsumeController extends BaseRabbitMqController
         return 0;
     }
 
+    /**
+     * @param array $options
+     * @param int $memoryLimitBytes
+     * @return array
+     * @throws JsonException
+     */
     private function buildConsumeOptions(array $options, int $memoryLimitBytes): array
     {
         if ($this->consumeFailFast !== null) {
@@ -156,19 +180,22 @@ class ConsumeController extends BaseRabbitMqController
     {
         $items = array_map('trim', explode(',', $value));
 
-        return array_values(array_filter($items, function ($item) {
-            return $item !== '';
-        }));
+        return array_values(array_filter($items, static fn($item) => $item !== ''));
     }
 
+    /**
+     * @param string $value
+     * @return array
+     * @throws JsonException
+     */
     private function parseRetryPolicy(string $value): array
     {
-        $data = json_decode($value, true);
+        $data = json_decode($value, true, 512, JSON_THROW_ON_ERROR);
         if ($data === null && json_last_error() !== JSON_ERROR_NONE) {
-            throw new \InvalidArgumentException('retryPolicy must be valid JSON: ' . json_last_error_msg());
+            throw new InvalidArgumentException('retryPolicy must be valid JSON: ' . json_last_error_msg());
         }
         if (!is_array($data)) {
-            throw new \InvalidArgumentException('retryPolicy must decode to array.');
+            throw new InvalidArgumentException('retryPolicy must decode to array.');
         }
 
         return $data;

@@ -21,6 +21,7 @@ use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
 use illusiard\rabbitmq\profile\OptionsMerger;
 use InvalidArgumentException;
+use JsonException;
 use ReflectionException;
 use Throwable;
 use Yii;
@@ -159,6 +160,7 @@ class ConsumeRunner
      * @param array $options
      * @return callable
      * @throws InvalidConfigException
+     * @throws JsonException
      * @throws ReflectionException
      */
     private function buildPipelineHandler(string $queue, $handler, array $options): callable
@@ -275,10 +277,12 @@ class ConsumeRunner
      * @param string $handlerClass
      * @return array
      * @throws InvalidConfigException
+     * @throws JsonException
      */
     private function resolveMiddlewares(ConsumerInterface $consumer, array $options, string $handlerClass): array
     {
         $middlewares = [];
+        $seen = [];
         $registry = null;
 
         foreach ($consumer->getMiddlewares() as $middlewareId) {
@@ -286,34 +290,53 @@ class ConsumeRunner
                 throw new InvalidArgumentException('Consumer middleware id must be a string.');
             }
 
-            $middlewares[] = $this->instantiateMiddleware(
-                $this->resolveMiddlewareClass($middlewareId, $registry),
-                $consumer,
-                $handlerClass
-            );
+            $class = $this->resolveMiddlewareClass($middlewareId, $registry);
+            $this->appendMiddleware($middlewares, $seen, $class, $consumer, $handlerClass);
         }
 
         $optionMiddlewares = $options['consumeMiddlewares'] ?? $options['middlewares'] ?? [];
         if (is_array($optionMiddlewares)) {
             foreach ($optionMiddlewares as $middleware) {
                 if (is_string($middleware)) {
-                    $middlewares[] = $this->instantiateMiddleware(
-                        $this->resolveMiddlewareClass($middleware, $registry),
-                        $consumer,
-                        $handlerClass
-                    );
+                    $class = $this->resolveMiddlewareClass($middleware, $registry);
+                    $this->appendMiddleware($middlewares, $seen, $class, $consumer, $handlerClass);
                     continue;
                 }
 
                 if (is_array($middleware) && isset($middleware['class']) && is_string($middleware['class'])) {
-                    $middlewares[] = $this->instantiateMiddleware($middleware['class'], $consumer, $handlerClass, $middleware);
+                    $this->appendMiddleware(
+                        $middlewares,
+                        $seen,
+                        $middleware['class'],
+                        $consumer,
+                        $handlerClass,
+                        $middleware
+                    );
                     continue;
                 }
 
                 if (is_array($middleware) && isset($middleware['id']) && is_string($middleware['id'])) {
                     $middleware['class'] = $this->resolveMiddlewareClass($middleware['id'], $registry);
                     unset($middleware['id']);
-                    $middlewares[] = $this->instantiateMiddleware($middleware['class'], $consumer, $handlerClass, $middleware);
+                    $this->appendMiddleware(
+                        $middlewares,
+                        $seen,
+                        $middleware['class'],
+                        $consumer,
+                        $handlerClass,
+                        $middleware
+                    );
+                    continue;
+                }
+
+                if (is_object($middleware)) {
+                    $this->appendMiddlewareInstance(
+                        $middlewares,
+                        $seen,
+                        $middleware,
+                        $consumer,
+                        $handlerClass
+                    );
                     continue;
                 }
 
@@ -368,6 +391,106 @@ class ConsumeRunner
         }
 
         throw new InvalidArgumentException('Middleware must implement definitions MiddlewareInterface.');
+    }
+
+    /**
+     * @param array $middlewares
+     * @param array $seen
+     * @param string $class
+     * @param ConsumerInterface $consumer
+     * @param string $handlerClass
+     * @param array $config
+     * @return void
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
+    private function appendMiddleware(
+        array &$middlewares,
+        array &$seen,
+        string $class,
+        ConsumerInterface $consumer,
+        string $handlerClass,
+        array $config = []
+    ): void {
+        $config = $config ?: ['class' => $class];
+        $key = $this->middlewareDefinitionKey($class, $config);
+        if (isset($seen[$key])) {
+            return;
+        }
+
+        $instance = $this->instantiateMiddleware($class, $consumer, $handlerClass, $config);
+        $instanceKey = 'object:' . spl_object_id($instance);
+        if (isset($seen[$instanceKey])) {
+            return;
+        }
+
+        $middlewares[] = $instance;
+        $seen[$key] = true;
+        $seen[$instanceKey] = true;
+    }
+
+    private function appendMiddlewareInstance(
+        array &$middlewares,
+        array &$seen,
+        object $instance,
+        ConsumerInterface $consumer,
+        string $handlerClass
+    ): void {
+        $instanceKey = 'object:' . spl_object_id($instance);
+        if (isset($seen[$instanceKey])) {
+            return;
+        }
+
+        if ($instance instanceof MiddlewareInterface) {
+            $middleware = $instance;
+        } elseif ($instance instanceof ConsumeMiddlewareInterface) {
+            $middleware = new LegacyConsumeMiddlewareAdapter($instance, $this->service, $consumer, $handlerClass);
+        } else {
+            throw new InvalidArgumentException('Middleware must implement definitions MiddlewareInterface.');
+        }
+
+        $middlewares[] = $middleware;
+        $seen[$instanceKey] = true;
+    }
+
+    /**
+     * @param string $class
+     * @param array $config
+     * @return string
+     * @throws JsonException
+     */
+    private function middlewareDefinitionKey(string $class, array $config): string
+    {
+        $normalized = $this->normalizeMiddlewareConfig($config);
+
+        return 'config:' . $class . ':' . sha1(json_encode($normalized, JSON_THROW_ON_ERROR) ?: serialize($normalized));
+    }
+
+    private function normalizeMiddlewareConfig($value)
+    {
+        if (is_array($value)) {
+            $normalized = array_map(fn($item) => $this->normalizeMiddlewareConfig($item), $value);
+            if (!array_is_list($normalized)) {
+                ksort($normalized);
+            }
+
+            return $normalized;
+        }
+
+        if (is_object($value)) {
+            return [
+                '__object' => get_class($value),
+                'id' => spl_object_id($value),
+            ];
+        }
+
+        if (is_resource($value)) {
+            return [
+                '__resource' => get_resource_type($value),
+            ];
+        }
+
+        return $value;
     }
 
     private function buildExceptionClassifier(array $options): DefaultExceptionClassifier

@@ -2,7 +2,9 @@
 
 namespace illusiard\rabbitmq\tests;
 
+use JsonException;
 use Yii;
+use yii\base\InvalidConfigException;
 use yii\caching\ArrayCache;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\definitions\discovery\DiscoveryEngine;
@@ -22,6 +24,10 @@ class DefinitionsDiscoveryTest extends TestCase
         $this->originalAppAlias = $alias !== false ? $alias : null;
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
     protected function tearDown(): void
     {
         if ($this->tempRoot && is_dir($this->tempRoot)) {
@@ -53,11 +59,16 @@ class DefinitionsDiscoveryTest extends TestCase
         Yii::setAlias('@app', $root);
 
         $engine = new DiscoveryEngine();
-        $fqcn = $engine->filePathToFqcn($path, '@app', 'app');
+        $fqcn = $engine->filePathToFqcn($path);
 
         $this->assertSame('app\\services\\rabbitmq\\consumers\\FooConsumer', $fqcn);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function testRegistryScansOnlyGivenPaths(): void
     {
         $root = $this->createTempRoot();
@@ -119,6 +130,11 @@ PHP
         $this->assertArrayNotHasKey('hidden', $all);
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function testDuplicateIdThrows(): void
     {
         $this->expectException(DuplicateDefinitionIdException::class);
@@ -176,6 +192,121 @@ PHP
         $discovery->discoverConsumers();
     }
 
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
+    public function testMultiPathConfigurationFiltersRegistryTypes(): void
+    {
+        $root = $this->createTempRoot();
+        $base = $root . '/services/rabbitmq';
+
+        $this->writeFile(
+            $base . '/consumers/OrdersConsumer.php',
+            <<<'PHP'
+<?php
+
+namespace defs\services\rabbitmq\consumers;
+
+use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
+
+class OrdersConsumer implements ConsumerInterface
+{
+    public function getQueue(): string { return 'orders'; }
+    public function getHandler() { return function () { return true; }; }
+    public function getOptions(): array { return []; }
+    public function getMiddlewares(): array { return []; }
+}
+PHP
+        );
+
+        $this->writeFile(
+            $base . '/publishers/OrdersPublisher.php',
+            <<<'PHP'
+<?php
+
+namespace defs\services\rabbitmq\publishers;
+
+use illusiard\rabbitmq\definitions\publisher\PublisherInterface;
+
+class OrdersPublisher implements PublisherInterface
+{
+    public function getExchange(): string { return 'orders-exchange'; }
+    public function getRoutingKey(): string { return 'orders'; }
+    public function getOptions(): array { return []; }
+    public function getMiddlewares(): array { return []; }
+}
+PHP
+        );
+
+        $this->writeFile(
+            $base . '/middlewares/TraceMiddleware.php',
+            <<<'PHP'
+<?php
+
+namespace defs\services\rabbitmq\middlewares;
+
+use illusiard\rabbitmq\definitions\consume\ConsumeContext;
+use illusiard\rabbitmq\definitions\middleware\MiddlewareInterface;
+
+class TraceMiddleware implements MiddlewareInterface
+{
+    public function process(ConsumeContext $context, callable $next)
+    {
+        return $next($context);
+    }
+}
+PHP
+        );
+
+        $this->writeFile(
+            $base . '/handlers/OrdersHandler.php',
+            <<<'PHP'
+<?php
+
+namespace defs\services\rabbitmq\handlers;
+
+use illusiard\rabbitmq\definitions\consume\ConsumeResult;
+use illusiard\rabbitmq\definitions\handler\HandlerInterface;
+use illusiard\rabbitmq\message\Envelope;
+
+class OrdersHandler implements HandlerInterface
+{
+    public function handle(Envelope $envelope): ConsumeResult|bool
+    {
+        return true;
+    }
+}
+PHP
+        );
+
+        Yii::setAlias('@defs', $root);
+
+        $config = new DiscoveryConfig([
+            'enabled' => true,
+            'paths' => [
+                '@defs/services/rabbitmq/consumers',
+                '@defs/services/rabbitmq/publishers',
+                '@defs/services/rabbitmq/middlewares',
+                '@defs/services/rabbitmq/handlers',
+            ],
+            'aliasRoot' => '@defs',
+            'baseNamespace' => 'defs',
+        ]);
+        $discovery = new DefinitionsDiscovery($config);
+
+        $this->assertArrayHasKey('orders', $discovery->discoverConsumers()->all());
+        $this->assertArrayHasKey('orders', $discovery->discoverPublishers()->all());
+        $this->assertArrayHasKey('trace', $discovery->discoverMiddlewares()->all());
+        $this->assertArrayHasKey('orders', $discovery->discoverHandlers()->all());
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function testCacheHitReturnsCachedRegistry(): void
     {
         $root = $this->createTempRoot();
@@ -201,9 +332,7 @@ PHP
         );
 
         Yii::setAlias('@defs', $root);
-        if (Yii::$app) {
-            Yii::$app->set('cache', new ArrayCache());
-        }
+        Yii::$app?->set('cache', new ArrayCache());
 
         $config = new DiscoveryConfig([
             'enabled' => true,

@@ -10,60 +10,39 @@ class JsonMessageSerializer implements MessageSerializerInterface
 {
     public const CONTENT_TYPE = 'application/json';
 
-    private bool $throwOnError;
-
     public function __construct(array $config = [])
     {
-        $this->throwOnError = $config['throwOnError'] ?? true;
     }
 
     /**
      * @param Envelope $env
      * @return string
-     * @throws JsonException
      */
     public function encode(Envelope $env): string
     {
-        if ($this->throwOnError) {
-            try {
-                return json_encode($env->toArray(), JSON_THROW_ON_ERROR);
-            } catch (JsonException $e) {
-                throw new RabbitMqException('JSON encode failed: ' . $e->getMessage(), ErrorCode::SERIALIZATION_FAILED, 0, $e);
-            }
+        try {
+            return json_encode($env->toArray(), JSON_THROW_ON_ERROR);
+        } catch (JsonException $e) {
+            throw new RabbitMqException('JSON encode failed: ' . $e->getMessage(), ErrorCode::SERIALIZATION_FAILED, 0, $e);
         }
-
-        $json = json_encode($env->toArray(), JSON_THROW_ON_ERROR);
-        if ($json === false) {
-            throw new RabbitMqException('JSON encode failed: ' . json_last_error_msg(), ErrorCode::SERIALIZATION_FAILED);
-        }
-
-        return $json;
     }
 
     /**
      * @param string $body
      * @param array $meta
      * @return Envelope
-     * @throws JsonException
      */
     public function decode(string $body, array $meta = []): Envelope
     {
-        if ($this->throwOnError) {
-            try {
-                $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-            } catch (JsonException $e) {
-                throw new RabbitMqException(
-                    'JSON decode failed: ' . $e->getMessage(),
-                    ErrorCode::SERIALIZATION_FAILED,
-                    0,
-                    $e
-                );
-            }
-        } else {
+        try {
             $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-            if ($data === null && json_last_error() !== JSON_ERROR_NONE) {
-                throw new RabbitMqException('JSON decode failed: ' . json_last_error_msg(), ErrorCode::SERIALIZATION_FAILED);
-            }
+        } catch (JsonException $e) {
+            throw new RabbitMqException(
+                'JSON decode failed: ' . $e->getMessage(),
+                ErrorCode::SERIALIZATION_FAILED,
+                0,
+                $e
+            );
         }
 
         if (is_array($data) && $this->isEnvelopeShape($data)) {

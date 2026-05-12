@@ -3,9 +3,11 @@
 namespace illusiard\rabbitmq\tests;
 
 use illusiard\rabbitmq\definitions\consume\ConsumeResult;
+use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
 use illusiard\rabbitmq\definitions\consumer\RuntimeConsumer;
 use illusiard\rabbitmq\exceptions\ErrorCode;
 use illusiard\rabbitmq\exceptions\RecoverableException;
+use illusiard\rabbitmq\tests\fixtures\CountingConsumeMiddleware;
 use illusiard\rabbitmq\tests\fixtures\NonHandlerInvokable;
 use illusiard\rabbitmq\tests\fixtures\RunnerDecodeRetryRabbitMqService;
 use illusiard\rabbitmq\tests\fixtures\RunnerLockRabbitMqService;
@@ -253,5 +255,59 @@ class ConsumeRunnerTest extends TestCase
         $this->assertSame('retry-ex', $service->published[0]['exchange']);
         $this->assertSame('queue.retry.1', $service->published[0]['routingKey']);
         $this->assertSame(1, $service->published[0]['headers']['x-retry-count']);
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testComponentMiddlewareRunsOnceWhenAlreadyMergedIntoConsumer(): void
+    {
+        CountingConsumeMiddleware::$calls = 0;
+
+        $service = new RunnerMiddlewareRabbitMqService([
+            'consumeMiddlewares' => [
+                CountingConsumeMiddleware::class,
+            ],
+        ]);
+        $runner = new ConsumeRunner($service);
+        $handler = static fn(): bool => true;
+        $consumer = new class ($handler) implements ConsumerInterface {
+            private $handler;
+
+            public function __construct($handler)
+            {
+                $this->handler = $handler;
+            }
+
+            public function getQueue(): string
+            {
+                return 'queue';
+            }
+
+            public function getHandler()
+            {
+                return $this->handler;
+            }
+
+            public function getOptions(): array
+            {
+                return [];
+            }
+
+            public function getMiddlewares(): array
+            {
+                return [
+                    CountingConsumeMiddleware::class,
+                ];
+            }
+        };
+
+        $exitCode = $runner->run('queue', $handler, [
+            'consumer' => $consumer,
+        ]);
+
+        $this->assertSame(0, $exitCode);
+        $this->assertSame(1, CountingConsumeMiddleware::$calls);
     }
 }

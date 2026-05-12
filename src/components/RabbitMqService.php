@@ -745,11 +745,14 @@ class RabbitMqService extends Component
      * @return void
      * @throws InvalidConfigException
      * @throws JsonException
+     * @throws ReflectionException
      */
     public function setupTopology(array $config, bool $dryRun = false): void
     {
-        $topology = (new TopologyBuilder())->buildFromConfig($config);
+        $builder = new TopologyBuilder();
+        $topology = $builder->buildFromConfig($config);
         $topology->validate();
+        $builder->validateConsumerQueues($topology, $this);
         if ($dryRun) {
             return;
         }
@@ -779,6 +782,10 @@ class RabbitMqService extends Component
     public function applyTopology(Topology $topology, bool $dryRun = false): void
     {
         $topology->validate();
+
+        if ($dryRun) {
+            return;
+        }
 
         $connection = $this->ensureConnection();
         if (!$connection instanceof AmqpConnection) {

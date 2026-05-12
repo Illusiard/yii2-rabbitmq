@@ -5,6 +5,7 @@ namespace illusiard\rabbitmq\tests;
 use JsonException;
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\components\RabbitMqService;
+use illusiard\rabbitmq\exceptions\ErrorCode;
 use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\message\JsonMessageSerializer;
 use illusiard\rabbitmq\exceptions\RabbitMqException;
@@ -12,10 +13,6 @@ use yii\base\InvalidConfigException;
 
 class JsonMessageSerializerTest extends TestCase
 {
-    /**
-     * @return void
-     * @throws JsonException
-     */
     public function testEncodeDecode(): void
     {
         $serializer = new JsonMessageSerializer();
@@ -32,10 +29,6 @@ class JsonMessageSerializerTest extends TestCase
         $this->assertSame(['h' => 'v'], $decoded->getHeaders());
     }
 
-    /**
-     * @return void
-     * @throws JsonException
-     */
     public function testDecodeInvalidJsonThrows(): void
     {
         $serializer = new JsonMessageSerializer();
@@ -44,10 +37,6 @@ class JsonMessageSerializerTest extends TestCase
         $serializer->decode('{invalid json}');
     }
 
-    /**
-     * @return void
-     * @throws JsonException
-     */
     public function testDecodeInvalidJsonDoesNotExposeBodyInException(): void
     {
         $serializer = new JsonMessageSerializer();
@@ -78,10 +67,6 @@ class JsonMessageSerializerTest extends TestCase
         $this->assertSame($payload, $decoded->getPayload());
     }
 
-    /**
-     * @return void
-     * @throws JsonException
-     */
     public function testDecodePlainJsonUsesAmqpMessageId(): void
     {
         $serializer = new JsonMessageSerializer();
@@ -216,5 +201,29 @@ class JsonMessageSerializerTest extends TestCase
         $decoded = $serializer->decode($body);
 
         $this->assertSame($payload, $decoded->getPayload());
+    }
+
+    public function testDecodeInvalidJsonUsesSerializationFailedCode(): void
+    {
+        $serializer = new JsonMessageSerializer();
+
+        try {
+            $serializer->decode('{invalid json}');
+            $this->fail('Decode should throw.');
+        } catch (RabbitMqException $e) {
+            $this->assertSame(ErrorCode::SERIALIZATION_FAILED, $e->getErrorCode());
+        }
+    }
+
+    public function testEncodeInvalidPayloadThrowsRabbitMqException(): void
+    {
+        $serializer = new JsonMessageSerializer();
+
+        try {
+            $serializer->encode(new Envelope(INF));
+            $this->fail('Encode should throw.');
+        } catch (RabbitMqException $e) {
+            $this->assertSame(ErrorCode::SERIALIZATION_FAILED, $e->getErrorCode());
+        }
     }
 }

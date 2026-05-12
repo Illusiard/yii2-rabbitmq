@@ -2,7 +2,9 @@
 
 namespace illusiard\rabbitmq\console;
 
+use Throwable;
 use Yii;
+use yii\base\InvalidConfigException;
 use yii\console\Controller;
 use illusiard\rabbitmq\components\RabbitMqService;
 use InvalidArgumentException;
@@ -23,13 +25,26 @@ abstract class BaseRabbitMqController extends Controller
         ]);
     }
 
+    /**
+     * @return RabbitMqService
+     * @throws InvalidConfigException
+     */
     protected function getRabbitService(): RabbitMqService
     {
         $service = Yii::$app->get($this->component);
         if (!$service instanceof RabbitMqService) {
-            throw new InvalidArgumentException("Component '{$this->component}' must be an instance of RabbitMqService.");
+            throw new InvalidArgumentException("Component '$this->component' must be an instance of RabbitMqService.");
         }
 
         return $service;
+    }
+
+    protected function isDiscoveryUnavailable(Throwable $e): bool
+    {
+        return in_array($e->getMessage(), [
+            'Discovery is disabled.',
+            'Discovery paths are not configured.',
+            'Handler discovery is disabled because no handlers path is configured.',
+        ], true);
     }
 }

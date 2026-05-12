@@ -55,7 +55,7 @@ class TopologyBuilder
      * @throws ReflectionException
      * @throws InvalidConfigException
      */
-    private function validateConsumerQueues(Topology $topology, RabbitMqService $service): void
+    public function validateConsumerQueues(Topology $topology, RabbitMqService $service): void
     {
         try {
             $registry = $service->getConsumerRegistry();
@@ -75,7 +75,7 @@ class TopologyBuilder
             $queue = $consumer->getQueue();
             if (!$topology->hasQueue($queue)) {
                 throw new RabbitMqException(
-                    "Consumer queue '$queue' is missing from topology.",
+                    "Consumer queue '$queue' for '$fqcn' is missing from topology.",
                     ErrorCode::TOPOLOGY_INVALID
                 );
             }

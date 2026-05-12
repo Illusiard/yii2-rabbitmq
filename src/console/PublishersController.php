@@ -2,14 +2,19 @@
 
 namespace illusiard\rabbitmq\console;
 
+use Throwable;
+
 class PublishersController extends BaseRabbitMqController
 {
     public function actionIndex(): int
     {
         try {
             $registry = $this->getRabbitService()->getPublisherRegistry();
-        } catch (\Throwable $e) {
-            $this->stderr("Discovery is disabled; enable it to list publishers.\n");
+        } catch (Throwable $e) {
+            $message = $this->isDiscoveryUnavailable($e)
+                ? 'Discovery is disabled; enable it to list publishers.'
+                : $e->getMessage();
+            $this->stderr($message . PHP_EOL);
             return 1;
         }
 
