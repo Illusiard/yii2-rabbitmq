@@ -1,6 +1,6 @@
 <?php
 
-namespace illusiard\rabbitmq\tests\integration\fixtures\consume_definitions;
+namespace app\tests\integration\fixtures\consume_definitions;
 
 use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
 use illusiard\rabbitmq\tests\integration\fixtures\ConsumeHandler;

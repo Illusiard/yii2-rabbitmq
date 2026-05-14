@@ -49,6 +49,11 @@ class ConsumeIntegrationTest extends IntegrationTestCase
         if ($logFile === false) {
             $this->markTestSkipped('Failed to create temp log file.');
         }
+        $stdoutFile = tempnam(sys_get_temp_dir(), 'consume_stdout_');
+        $stderrFile = tempnam(sys_get_temp_dir(), 'consume_stderr_');
+        if ($stdoutFile === false || $stderrFile === false) {
+            $this->markTestSkipped('Failed to create temp process output files.');
+        }
 
         $cmd = [
             PHP_BINARY,
@@ -63,11 +68,10 @@ class ConsumeIntegrationTest extends IntegrationTestCase
             'READY_LOCK' => $readyFile,
         ]);
 
-        $null = (stripos(PHP_OS_FAMILY, 'Windows') !== false) ? 'NUL' : '/dev/null';
         $descriptors = [
             0 => ['pipe', 'r'],
-            1 => ['file', $null, 'w'],
-            2 => ['file', $null, 'w'],
+            1 => ['file', $stdoutFile, 'w'],
+            2 => ['file', $stderrFile, 'w'],
         ];
 
         [$process, $pipes] = ProcessHelper::startProcess($cmd, $env, $descriptors);
@@ -77,8 +81,16 @@ class ConsumeIntegrationTest extends IntegrationTestCase
             fclose($pipes[0]);
         }
 
-        $ready = $this->waitForFileExists($readyFile, 5);
-        $this->assertTrue($ready, 'Consumer process did not become ready.');
+        $ready = $this->waitForConsumerReady($process, $readyFile, 20);
+        if (!$ready) {
+            $status = proc_get_status($process);
+            ProcessHelper::terminateProcess($process);
+            ProcessHelper::closePipes($pipes);
+            $this->fail(
+                'Consumer process did not become ready. '
+                . $this->formatProcessDiagnostics($status, $stdoutFile, $stderrFile)
+            );
+        }
 
         $status = proc_get_status($process);
         $this->assertTrue($status['running']);
@@ -99,9 +111,47 @@ class ConsumeIntegrationTest extends IntegrationTestCase
         $this->assertTrue($this->waitForQueueCount($queue, 0));
 
         @unlink($logFile);
+        @unlink($stdoutFile);
+        @unlink($stderrFile);
         if ($readyFile !== '') {
             @unlink($readyFile);
         }
+    }
+
+    private function waitForConsumerReady($process, string $readyFile, int $timeoutSec): bool
+    {
+        $deadline = microtime(true) + max(0, $timeoutSec);
+
+        while (microtime(true) < $deadline) {
+            if (is_file($readyFile)) {
+                return true;
+            }
+
+            $status = proc_get_status($process);
+            if (!($status['running'] ?? false)) {
+                return false;
+            }
+
+            usleep(50_000);
+        }
+
+        return is_file($readyFile);
+    }
+
+    private function formatProcessDiagnostics(array $status, string $stdoutFile, string $stderrFile): string
+    {
+        $stdout = is_file($stdoutFile) ? trim((string)file_get_contents($stdoutFile)) : '';
+        $stderr = is_file($stderrFile) ? trim((string)file_get_contents($stderrFile)) : '';
+        $exitCode = $status['exitcode'] ?? null;
+        $running = ($status['running'] ?? false) ? 'yes' : 'no';
+
+        return sprintf(
+            'running=%s exitcode=%s stdout="%s" stderr="%s"',
+            $running,
+            is_int($exitCode) ? (string)$exitCode : 'unknown',
+            $stdout,
+            $stderr
+        );
     }
 
     private function waitForLogLines(string $path, int $expected, int $timeoutSec): bool
