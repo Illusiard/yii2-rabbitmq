@@ -19,6 +19,7 @@ You can override via env:
 - `RABBIT_USER`
 - `RABBIT_PASSWORD`
 - `RABBIT_VHOST`
+- `RABBITMQ_REQUIRED=1` to fail instead of skip when RabbitMQ is unavailable
 
 ## Conditional scenarios (env flags)
 
@@ -27,5 +28,3 @@ Some tests are skipped unless the environment can deterministically provide cond
 - `BLOCK_BROKER=1` (publishTimeout scenario)
 - `KILL_CONNECTION=1` (reconnect scenarios)
 - `RABBIT_CAN_RESTART=1` (durable/persistent scenario)
-
-The smoke test `RabbitAvailabilityTest` fails if RabbitMQ is unreachable, instead of skipping.

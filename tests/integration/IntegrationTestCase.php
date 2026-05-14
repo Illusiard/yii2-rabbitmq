@@ -6,9 +6,10 @@ use PhpAmqpLib\Wire\AMQPTable;
 use PHPUnit\Framework\TestCase;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Message\AMQPMessage;
+use Throwable;
 use Yii;
 use illusiard\rabbitmq\components\RabbitMqService;
-use illusiard\rabbitmq\amqp\AmqpConnection;
+use yii\base\InvalidConfigException;
 
 /**
  * @group integration
@@ -32,6 +33,9 @@ class IntegrationTestCase extends TestCase
             if ($this->lastPingError) {
                 $message .= ' (' . $this->lastPingError . ')';
             }
+            if ($this->envFlagEnabled('RABBITMQ_REQUIRED')) {
+                $this->fail($message);
+            }
             $this->markTestSkipped($message);
         }
     }
@@ -42,7 +46,7 @@ class IntegrationTestCase extends TestCase
 
         try {
             $this->service->getConnection()->close();
-        } catch (\Throwable $e) {
+        } catch (Throwable) {
         }
 
         parent::tearDown();
@@ -54,12 +58,15 @@ class IntegrationTestCase extends TestCase
         return new RabbitMqService($config);
     }
 
+    /**
+     * @param RabbitMqService $service
+     * @return void
+     * @throws InvalidConfigException
+     */
     protected function setService(RabbitMqService $service): void
     {
         $this->service = $service;
-        if (Yii::$app) {
-            Yii::$app->set('rabbitmq', $service);
-        }
+        Yii::$app?->set('rabbitmq', $service);
     }
 
     protected function pingRabbit(): bool
@@ -70,7 +77,7 @@ class IntegrationTestCase extends TestCase
                 $this->lastPingError = $this->service->getLastError();
             }
             return $result;
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->lastPingError = get_class($e) . ': ' . $e->getMessage();
             return false;
         }
@@ -88,23 +95,33 @@ class IntegrationTestCase extends TestCase
         );
     }
 
+    /**
+     * @return AMQPChannel
+     * @throws InvalidConfigException
+     */
     protected function getChannel(): AMQPChannel
     {
-        $connection = $this->service->getConnection();
-        if ($connection instanceof AmqpConnection) {
-            return $connection->getAmqpConnection()->channel();
-        }
-
-        $amqp = $connection->getAmqpConnection();
-        return $amqp->channel();
+        return $this->service->getConnection()->getAmqpConnection()->channel();
     }
 
+    /**
+     * @param string $suffix
+     * @return string
+     * @throws Throwable
+     */
     protected function uniqueName(string $suffix): string
     {
         $random = bin2hex(random_bytes(4));
         return 'illusiard_test_' . $suffix . '_' . $random;
     }
 
+    /**
+     * @param string $name
+     * @param string $type
+     * @param bool $durable
+     * @return void
+     * @throws InvalidConfigException
+     */
     protected function declareExchange(string $name, string $type = 'direct', bool $durable = true): void
     {
         $channel = $this->getChannel();
@@ -118,6 +135,13 @@ class IntegrationTestCase extends TestCase
         }
     }
 
+    /**
+     * @param string $name
+     * @param bool $durable
+     * @param array $arguments
+     * @return void
+     * @throws InvalidConfigException
+     */
     protected function declareQueue(string $name, bool $durable = true, array $arguments = []): void
     {
         $channel = $this->getChannel();
@@ -135,6 +159,13 @@ class IntegrationTestCase extends TestCase
         }
     }
 
+    /**
+     * @param string $queue
+     * @param string $exchange
+     * @param string $routingKey
+     * @return void
+     * @throws InvalidConfigException
+     */
     protected function bindQueue(string $queue, string $exchange, string $routingKey): void
     {
         $channel = $this->getChannel();
@@ -147,6 +178,15 @@ class IntegrationTestCase extends TestCase
         }
     }
 
+    /**
+     * @param string $body
+     * @param string $exchange
+     * @param string $routingKey
+     * @param array $properties
+     * @param array $headers
+     * @return void
+     * @throws InvalidConfigException
+     */
     protected function publishRaw(
         string $body,
         string $exchange,
@@ -168,12 +208,17 @@ class IntegrationTestCase extends TestCase
         }
     }
 
-    protected function basicGet(string $queue, bool $ack = false): ?\PhpAmqpLib\Message\AMQPMessage
+    /**
+     * @param string $queue
+     * @param bool $ack
+     * @return ?AMQPMessage
+     * @throws InvalidConfigException
+     */
+    protected function basicGet(string $queue, bool $ack = false): ?AMQPMessage
     {
         $channel = $this->getChannel();
         try {
-            $message = $channel->basic_get($queue, $ack);
-            return $message;
+            return $channel->basic_get($queue, $ack);
         } finally {
             if ($channel->is_open()) {
                 $channel->close();
@@ -181,11 +226,17 @@ class IntegrationTestCase extends TestCase
         }
     }
 
-    protected function waitForMessage(string $queue, int $timeoutSec = 5): ?\PhpAmqpLib\Message\AMQPMessage
+    /**
+     * @param string $queue
+     * @param int $timeoutSec
+     * @return ?AMQPMessage
+     * @throws InvalidConfigException
+     */
+    protected function waitForMessage(string $queue, int $timeoutSec = 5): ?AMQPMessage
     {
         $deadline = microtime(true) + max(0, $timeoutSec);
         while (microtime(true) < $deadline) {
-            $message = $this->basicGet($queue, false);
+            $message = $this->basicGet($queue);
             if ($message !== null) {
                 return $message;
             }
@@ -195,6 +246,13 @@ class IntegrationTestCase extends TestCase
         return null;
     }
 
+    /**
+     * @param string $queue
+     * @param int $expected
+     * @param int $timeoutSec
+     * @return bool
+     * @throws InvalidConfigException
+     */
     protected function waitForQueueCount(string $queue, int $expected, int $timeoutSec = 5): bool
     {
         $deadline = microtime(true) + max(0, $timeoutSec);
@@ -237,6 +295,11 @@ class IntegrationTestCase extends TestCase
         return !is_file($path);
     }
 
+    /**
+     * @param string $queue
+     * @return int
+     * @throws InvalidConfigException
+     */
     protected function getQueueCount(string $queue): int
     {
         $channel = $this->getChannel();
@@ -264,7 +327,7 @@ class IntegrationTestCase extends TestCase
 
         try {
             $channel = $this->getChannel();
-        } catch (\Throwable $e) {
+        } catch (Throwable) {
             return;
         }
 
@@ -272,14 +335,14 @@ class IntegrationTestCase extends TestCase
             foreach (array_keys($this->queues) as $queue) {
                 try {
                     $channel->queue_delete($queue);
-                } catch (\Throwable $e) {
+                } catch (Throwable) {
                 }
             }
 
             foreach (array_keys($this->exchanges) as $exchange) {
                 try {
                     $channel->exchange_delete($exchange);
-                } catch (\Throwable $e) {
+                } catch (Throwable) {
                 }
             }
         } finally {

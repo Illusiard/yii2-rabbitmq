@@ -10,8 +10,13 @@ class JsonMessageSerializer implements MessageSerializerInterface
 {
     public const CONTENT_TYPE = 'application/json';
 
+    public int $decodeDepth = 512;
+
     public function __construct(array $config = [])
     {
+        if (isset($config['decodeDepth']) && is_int($config['decodeDepth'])) {
+            $this->decodeDepth = $config['decodeDepth'];
+        }
     }
 
     /**
@@ -35,7 +40,7 @@ class JsonMessageSerializer implements MessageSerializerInterface
     public function decode(string $body, array $meta = []): Envelope
     {
         try {
-            $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+            $data = json_decode($body, true, $this->getDecodeDepth(), JSON_THROW_ON_ERROR);
         } catch (JsonException $e) {
             throw new RabbitMqException(
                 'JSON decode failed: ' . $e->getMessage(),
@@ -105,7 +110,7 @@ class JsonMessageSerializer implements MessageSerializerInterface
         }
 
         try {
-            json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+            json_decode($body, true, $this->getDecodeDepth(), JSON_THROW_ON_ERROR);
         } catch (JsonException) {
             return false;
         }
@@ -116,5 +121,10 @@ class JsonMessageSerializer implements MessageSerializerInterface
     public function getContentType(): string
     {
         return self::CONTENT_TYPE;
+    }
+
+    private function getDecodeDepth(): int
+    {
+        return $this->decodeDepth > 0 ? $this->decodeDepth : 512;
     }
 }

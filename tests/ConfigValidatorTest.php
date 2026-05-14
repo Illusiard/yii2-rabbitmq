@@ -99,4 +99,79 @@ class ConfigValidatorTest extends TestCase
             ],
         ]);
     }
+
+    public function testSslConfigAllowsStreamContextOptions(): void
+    {
+        $validator = new ConfigValidator();
+        $validator->validate([
+            'amqp' => [
+                'host' => '127.0.0.1',
+                'port' => 5672,
+                'user' => 'guest',
+                'password' => 'guest',
+                'ssl' => [
+                    'cafile' => '/path/to/ca.pem',
+                    'verify_peer' => true,
+                    'verify_depth' => 3,
+                    'crypto_method' => STREAM_CRYPTO_METHOD_TLS_CLIENT,
+                ],
+            ],
+        ]);
+
+        $this->assertTrue(true);
+    }
+
+    public function testSslConfigMustBeArrayOrNull(): void
+    {
+        $validator = new ConfigValidator();
+
+        $this->expectException(RabbitMqException::class);
+        $this->expectExceptionMessage('amqp.ssl must be an array or null.');
+
+        $validator->validate([
+            'amqp' => [
+                'host' => '127.0.0.1',
+                'port' => 5672,
+                'user' => 'guest',
+                'password' => 'guest',
+                'ssl' => 'enabled',
+            ],
+        ]);
+    }
+
+    public function testReconnectAttemptsMustBePositive(): void
+    {
+        $validator = new ConfigValidator();
+
+        $this->expectException(RabbitMqException::class);
+        $this->expectExceptionMessage('amqp.consumeReconnectAttempts must be >= 1.');
+
+        $validator->validate([
+            'amqp' => [
+                'host' => '127.0.0.1',
+                'port' => 5672,
+                'user' => 'guest',
+                'password' => 'guest',
+                'consumeReconnectAttempts' => 0,
+            ],
+        ]);
+    }
+
+    public function testMessageLimitExceededActionMustBeKnown(): void
+    {
+        $validator = new ConfigValidator();
+
+        $this->expectException(RabbitMqException::class);
+        $this->expectExceptionMessage('messageLimitExceededAction must be reject, retry, or stop.');
+
+        $validator->validate([
+            'amqp' => [
+                'host' => '127.0.0.1',
+                'port' => 5672,
+                'user' => 'guest',
+                'password' => 'guest',
+            ],
+            'messageLimitExceededAction' => 'drop',
+        ]);
+    }
 }

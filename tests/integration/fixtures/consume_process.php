@@ -29,13 +29,11 @@ $service = new RabbitMqService([
     'vhost' => getenv('RABBIT_VHOST') ?: '/',
     'discovery' => [
         'enabled' => true,
-        'paths' => ['@app/tests/integration/fixtures'],
+        'paths' => ['@app/tests/integration/fixtures/consume_definitions'],
     ],
 ]);
 
-if (Yii::$app) {
-    Yii::$app->set('rabbitmq', $service);
-}
+Yii::$app?->set('rabbitmq', $service);
 
 $controller = new ConsumeController('consume', Yii::$app);
 $runnerOptions = null;

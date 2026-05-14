@@ -2,6 +2,7 @@
 
 namespace illusiard\rabbitmq\components;
 
+use Closure;
 use Exception;
 use JsonException;
 use ReflectionException;
@@ -39,6 +40,7 @@ use illusiard\rabbitmq\profile\OptionsMerger;
 use illusiard\rabbitmq\profile\ProfiledConsumer;
 use illusiard\rabbitmq\profile\ProfiledPublisher;
 use illusiard\rabbitmq\profile\RabbitMqProfileInterface;
+use illusiard\rabbitmq\helpers\SensitiveDataHelper;
 use InvalidArgumentException;
 use illusiard\rabbitmq\topology\Topology;
 use illusiard\rabbitmq\topology\TopologyBuilder;
@@ -60,6 +62,7 @@ class RabbitMqService extends Component
         'consumeFailFast' => true,
         'fatalExceptionClasses' => [],
         'recoverableExceptionClasses' => [],
+        'messageLimitExceededAction' => 'reject',
     ];
 
     public string       $host                        = '127.0.0.1';
@@ -70,6 +73,8 @@ class RabbitMqService extends Component
     public int          $heartbeat                   = 30;
     public int          $readWriteTimeout            = 3;
     public int          $connectionTimeout           = 3;
+    public int          $consumeReconnectAttempts    = 3;
+    public int          $consumeReconnectDelaySeconds = 1;
     public ?array       $ssl                         = null;
     public array        $topology                    = [];
     public bool         $confirm                     = false;
@@ -86,9 +91,12 @@ class RabbitMqService extends Component
     public bool         $consumeFailFast             = true;
     public array        $fatalExceptionClasses       = [];
     public array        $recoverableExceptionClasses = [];
-    public array|string $returnHandler               = LoggingReturnHandler::class;
+    public int          $maxMessageBodyBytes         = 0;
+    public int          $jsonDecodeDepth             = 512;
+    public string       $messageLimitExceededAction  = 'reject';
+    public array|string|ReturnHandlerInterface $returnHandler = LoggingReturnHandler::class;
     public bool         $returnHandlerEnabled        = true;
-    public array|string $returnSink                  = InMemoryReturnSink::class;
+    public array|string|ReturnSinkInterface $returnSink = InMemoryReturnSink::class;
     public bool         $returnSinkEnabled           = true;
     public ?string      $componentId                 = null;
     public array        $discovery                   = [];
@@ -139,6 +147,9 @@ class RabbitMqService extends Component
                     'heartbeat'         => $this->heartbeat,
                     'readWriteTimeout'  => $this->readWriteTimeout,
                     'connectionTimeout' => $this->connectionTimeout,
+                    'consumeReconnectAttempts' => $this->consumeReconnectAttempts,
+                    'consumeReconnectDelaySeconds' => $this->consumeReconnectDelaySeconds,
+                    'ssl'               => $this->ssl,
                     'confirm'           => $this->confirm,
                     'mandatory'         => $this->mandatory,
                     'mandatoryStrict'   => $this->mandatoryStrict,
@@ -152,6 +163,9 @@ class RabbitMqService extends Component
                 'consumeFailFast'             => $this->consumeFailFast,
                 'fatalExceptionClasses'       => $this->fatalExceptionClasses,
                 'recoverableExceptionClasses' => $this->recoverableExceptionClasses,
+                'maxMessageBodyBytes'         => $this->maxMessageBodyBytes,
+                'jsonDecodeDepth'             => $this->jsonDecodeDepth,
+                'messageLimitExceededAction'  => $this->messageLimitExceededAction,
                 'returnHandler'               => $this->returnHandler,
                 'returnHandlerEnabled'        => $this->returnHandlerEnabled,
                 'returnSink'                  => $this->returnSink,
@@ -168,7 +182,7 @@ class RabbitMqService extends Component
             throw $e;
         } catch (Throwable $e) {
             throw new RabbitMqException(
-                'Config validation failed: ' . $e->getMessage(),
+                'Config validation failed: ' . SensitiveDataHelper::redact($e->getMessage()),
                 ErrorCode::CONFIG_INVALID,
                 0,
                 $e
@@ -197,7 +211,12 @@ class RabbitMqService extends Component
         } catch (ConnectionException|PublishException $e) {
             throw $e;
         } catch (Throwable $e) {
-            throw new PublishException('Publish failed: ' . $e->getMessage(), ErrorCode::PUBLISH_FAILED, 0, $e);
+            throw new PublishException(
+                'Publish failed: ' . SensitiveDataHelper::redact($e->getMessage()),
+                ErrorCode::PUBLISH_FAILED,
+                0,
+                $e
+            );
         }
     }
 
@@ -221,20 +240,7 @@ class RabbitMqService extends Component
     {
         $context = $this->buildPublishContext($exchange, $routingKey);
 
-        $this->getPublishPipeline()->run($env, $context, function (Envelope $env) use ($exchange, $routingKey) {
-            $serializer = $this->getSerializer();
-            $body       = $serializer->encode($env);
-
-            $properties = $env->getProperties();
-            unset($properties['application_headers']);
-            $properties['content_type'] = $serializer->getContentType();
-            $properties['message_id'] = $env->getMessageId();
-            if ($env->getCorrelationId() !== null) {
-                $properties['correlation_id'] = $env->getCorrelationId();
-            }
-
-            $this->publish($body, $exchange, $routingKey, $properties, $env->getHeaders());
-        });
+        $this->getPublishPipeline()->run($env, $context, $this->createPublisherClosure($exchange, $routingKey));
     }
 
     /**
@@ -299,10 +305,65 @@ class RabbitMqService extends Component
             $options['headers'] ?? [],
             $options['properties'] ?? [],
             $options['type'] ?? null,
-            $options['correlationId'] ?? null
+            $options['correlationId'] ?? null,
+            $options['messageId'] ?? null
         );
 
         $this->publishEnvelope($env, $exchange, $routingKey);
+    }
+
+    /**
+     * Publishes a payload using a discovered publisher definition.
+     *
+     * Supported options: exchange, routingKey, headers, properties, type, correlationId,
+     * messageId, publishMiddlewares.
+     *
+     * @param string $publisherId
+     * @param mixed $payload
+     * @param array $options
+     * @return void
+     * @throws InvalidConfigException
+     * @throws JsonException
+     * @throws ReflectionException
+     */
+    public function publishById(string $publisherId, mixed $payload, array $options = []): void
+    {
+        $fqcn = $this->getPublisherRegistry()->get($publisherId);
+        if ($fqcn === null) {
+            throw new InvalidArgumentException('Publisher not found: ' . $publisherId);
+        }
+
+        $publisher = $this->createPublisherDefinition($fqcn);
+        $mergedOptions = OptionsMerger::merge($publisher->getOptions(), $options);
+
+        $exchange = $this->resolveStringOption($mergedOptions, 'exchange', $publisher->getExchange());
+        $routingKey = $this->resolveStringOption($mergedOptions, 'routingKey', $publisher->getRoutingKey());
+        $headers = $this->resolveArrayOption($mergedOptions, 'headers');
+        $properties = $this->resolveArrayOption($mergedOptions, 'properties');
+        $messageId = isset($mergedOptions['messageId']) && is_string($mergedOptions['messageId'])
+            ? $mergedOptions['messageId']
+            : null;
+        $correlationId = isset($mergedOptions['correlationId']) && is_string($mergedOptions['correlationId'])
+            ? $mergedOptions['correlationId']
+            : null;
+        $type = isset($mergedOptions['type']) && is_string($mergedOptions['type']) ? $mergedOptions['type'] : null;
+
+        if ($payload instanceof Envelope) {
+            $env = new Envelope(
+                $payload->getPayload(),
+                array_merge($payload->getHeaders(), $headers),
+                array_merge($payload->getProperties(), $properties),
+                $type ?? $payload->getType(),
+                $correlationId ?? $payload->getCorrelationId(),
+                $messageId ?? $payload->getMessageId(),
+                $payload->getTimestamp()
+            );
+        } else {
+            $env = new Envelope($payload, $headers, $properties, $type, $correlationId, $messageId);
+        }
+
+        $publishMiddlewares = $this->resolvePublisherMiddlewares($publisher, $mergedOptions);
+        $this->runPublishPipeline($env, $exchange, $routingKey, $publishMiddlewares, $this->createPublisherClosure($exchange, $routingKey));
     }
 
     /**
@@ -314,6 +375,13 @@ class RabbitMqService extends Component
      */
     public function decodeEnvelope(string $body, array $meta = []): Envelope
     {
+        if ($this->maxMessageBodyBytes > 0 && strlen($body) > $this->maxMessageBodyBytes) {
+            throw new RabbitMqException(
+                'Message body exceeds configured maxMessageBodyBytes.',
+                ErrorCode::MESSAGE_LIMIT_EXCEEDED
+            );
+        }
+
         return $this->getSerializer()->decode($body, $meta);
     }
 
@@ -415,6 +483,11 @@ class RabbitMqService extends Component
         return self::DEFAULT_RETRY_EXCHANGE;
     }
 
+    /**
+     * @return DefinitionConsumerRegistry
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function getConsumerRegistry(): DefinitionConsumerRegistry
     {
         if ($this->consumerRegistry !== null) {
@@ -428,6 +501,11 @@ class RabbitMqService extends Component
         return $this->consumerRegistry;
     }
 
+    /**
+     * @return DefinitionPublisherRegistry
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function getPublisherRegistry(): DefinitionPublisherRegistry
     {
         if ($this->publisherRegistry !== null) {
@@ -441,6 +519,11 @@ class RabbitMqService extends Component
         return $this->publisherRegistry;
     }
 
+    /**
+     * @return DefinitionMiddlewareRegistry
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function getMiddlewareRegistry(): DefinitionMiddlewareRegistry
     {
         if ($this->middlewareRegistry !== null) {
@@ -454,6 +537,11 @@ class RabbitMqService extends Component
         return $this->middlewareRegistry;
     }
 
+    /**
+     * @return DefinitionHandlerRegistry
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     public function getHandlerRegistry(): DefinitionHandlerRegistry
     {
         if ($this->handlerRegistry !== null) {
@@ -508,7 +596,7 @@ class RabbitMqService extends Component
     }
 
     /**
-     * @return RabbitMqProfileInterface|null
+     * @return ?RabbitMqProfileInterface
      * @throws InvalidConfigException
      * @throws ReflectionException
      */
@@ -861,7 +949,7 @@ class RabbitMqService extends Component
                 $connection->connect();
             } catch (Throwable $e) {
                 throw new ConnectionException(
-                    'Connection failed: ' . $e->getMessage(),
+                    'Connection failed: ' . SensitiveDataHelper::redact($e->getMessage()),
                     ErrorCode::CONNECTION_FAILED,
                     0,
                     $e
@@ -902,7 +990,7 @@ class RabbitMqService extends Component
     {
         $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::GENERIC;
 
-        return $code . ' ' . get_class($e) . ': ' . $e->getMessage();
+        return $code . ' ' . get_class($e) . ': ' . SensitiveDataHelper::redact($e->getMessage());
     }
 
     /**
@@ -916,7 +1004,18 @@ class RabbitMqService extends Component
         }
 
         if (is_string($this->serializer)) {
-            $this->serializer = ['class' => $this->serializer];
+            $config = ['class' => $this->serializer];
+            if ($this->serializer === JsonMessageSerializer::class) {
+                $config['decodeDepth'] = $this->jsonDecodeDepth;
+            }
+            $this->serializer = $config;
+        }
+
+        if (is_array($this->serializer)
+            && ($this->serializer['class'] ?? null) === JsonMessageSerializer::class
+            && !isset($this->serializer['decodeDepth'])
+        ) {
+            $this->serializer['decodeDepth'] = $this->jsonDecodeDepth;
         }
 
         $serializer = Yii::createObject($this->serializer);
@@ -940,6 +1039,10 @@ class RabbitMqService extends Component
 
         if ($this->returnHandlerInstance !== null) {
             return $this->returnHandlerInstance;
+        }
+
+        if ($this->returnHandler instanceof ReturnHandlerInterface) {
+            return $this->returnHandlerInstance = $this->returnHandler;
         }
 
         if (is_string($this->returnHandler)) {
@@ -967,6 +1070,10 @@ class RabbitMqService extends Component
 
         if ($this->returnSinkInstance !== null) {
             return $this->returnSinkInstance;
+        }
+
+        if ($this->returnSink instanceof ReturnSinkInterface) {
+            return $this->returnSinkInstance = $this->returnSink;
         }
 
         if (is_string($this->returnSink)) {
@@ -997,6 +1104,51 @@ class RabbitMqService extends Component
         $this->publishPipeline = new PublishPipeline($middlewares);
 
         return $this->publishPipeline;
+    }
+
+    /**
+     * @param Envelope $env
+     * @param string $exchange
+     * @param string $routingKey
+     * @param array $middlewareConfigs
+     * @param callable $final
+     * @return void
+     * @throws InvalidConfigException
+     */
+    private function runPublishPipeline(
+        Envelope $env,
+        string $exchange,
+        string $routingKey,
+        array $middlewareConfigs,
+        callable $final
+    ): void {
+        $context = $this->buildPublishContext($exchange, $routingKey);
+        $pipeline = new PublishPipeline($this->resolveMiddlewares($middlewareConfigs, PublishMiddlewareInterface::class));
+        $pipeline->run($env, $context, $final);
+    }
+
+    private function resolvePublisherMiddlewares(DefinitionPublisherInterface $publisher, array $options): array
+    {
+        $publisherMiddlewares = $publisher->getMiddlewares();
+        $optionMiddlewares = $options['publishMiddlewares'] ?? $options['middlewares'] ?? [];
+        if (!is_array($optionMiddlewares)) {
+            $optionMiddlewares = [];
+        }
+
+        return OptionsMerger::merge(
+            OptionsMerger::merge($this->publishMiddlewares, $publisherMiddlewares),
+            $optionMiddlewares
+        );
+    }
+
+    private function resolveStringOption(array $options, string $key, string $default): string
+    {
+        return isset($options[$key]) && is_string($options[$key]) ? $options[$key] : $default;
+    }
+
+    private function resolveArrayOption(array $options, string $key): array
+    {
+        return isset($options[$key]) && is_array($options[$key]) ? $options[$key] : [];
     }
 
     /**
@@ -1053,6 +1205,8 @@ class RabbitMqService extends Component
             'heartbeat'            => $this->heartbeat,
             'readWriteTimeout'     => $this->readWriteTimeout,
             'connectionTimeout'    => $this->connectionTimeout,
+            'consumeReconnectAttempts' => $this->consumeReconnectAttempts,
+            'consumeReconnectDelaySeconds' => $this->consumeReconnectDelaySeconds,
             'ssl'                  => $this->ssl,
             'confirm'              => $this->confirm,
             'mandatory'            => $this->mandatory,
@@ -1119,5 +1273,28 @@ class RabbitMqService extends Component
         }
 
         return $config;
+    }
+
+    /**
+     * @param string $exchange
+     * @param string $routingKey
+     * @return Closure
+     */
+    public function createPublisherClosure(string $exchange, string $routingKey): Closure
+    {
+        return function (Envelope $env) use ($exchange, $routingKey) {
+            $serializer = $this->getSerializer();
+            $body = $serializer->encode($env);
+
+            $properties = $env->getProperties();
+            unset($properties['application_headers']);
+            $properties['content_type'] = $serializer->getContentType();
+            $properties['message_id'] = $env->getMessageId();
+            if ($env->getCorrelationId() !== null) {
+                $properties['correlation_id'] = $env->getCorrelationId();
+            }
+
+            $this->publish($body, $exchange, $routingKey, $properties, $env->getHeaders());
+        };
     }
 }

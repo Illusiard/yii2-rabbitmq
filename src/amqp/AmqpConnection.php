@@ -7,6 +7,7 @@ use PhpAmqpLib\Connection\AMQPStreamConnection;
 use illusiard\rabbitmq\contracts\ConnectionInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;
 use illusiard\rabbitmq\contracts\ConsumerInterface;
+use yii\base\InvalidConfigException;
 
 class AmqpConnection implements ConnectionInterface
 {
@@ -74,6 +75,10 @@ class AmqpConnection implements ConnectionInterface
         $this->consumer = null;
     }
 
+    /**
+     * @return PublisherInterface
+     * @throws InvalidConfigException
+     */
     public function getPublisher(): PublisherInterface
     {
         if ($this->publisher === null) {
@@ -86,7 +91,7 @@ class AmqpConnection implements ConnectionInterface
     public function getConsumer(): ConsumerInterface
     {
         if ($this->consumer === null) {
-            $this->consumer = new AmqpConsumer($this);
+            $this->consumer = new AmqpConsumer($this, $this->config);
         }
 
         return $this->consumer;

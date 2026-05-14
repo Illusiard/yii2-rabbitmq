@@ -2,6 +2,7 @@
 
 namespace illusiard\rabbitmq\tests;
 
+use illusiard\rabbitmq\contracts\ConsumerInterface;
 use JsonException;
 use PHPUnit\Framework\MockObject\Exception;
 use PHPUnit\Framework\TestCase;
@@ -11,6 +12,7 @@ use Yii;
 use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\contracts\ConnectionInterface;
 use illusiard\rabbitmq\contracts\PublisherInterface;
+use illusiard\rabbitmq\exceptions\ErrorCode;
 use illusiard\rabbitmq\exceptions\RabbitMqException;
 use illusiard\rabbitmq\tests\fixtures\TopologyBuilderServiceWithMissingConsumerQueue;
 use illusiard\rabbitmq\topology\ExchangeDefinition;
@@ -152,5 +154,66 @@ class RabbitMqServiceTest extends TestCase
                 ['name' => 'events'],
             ],
         ], true);
+    }
+
+    public function testPingRedactsSensitiveConnectionErrors(): void
+    {
+        $service = new RabbitMqService([
+            'connectionFactory' => static fn(array $config): ConnectionInterface => new class implements ConnectionInterface {
+                public function connect(): void
+                {
+                    throw new RuntimeException(
+                        'Connection failed password=secret token=abc amqp://guest:dsn-secret@localhost'
+                    );
+                }
+
+                public function isConnected(): bool
+                {
+                    return false;
+                }
+
+                public function close(): void
+                {
+                }
+
+                public function getPublisher(): PublisherInterface
+                {
+                    throw new RuntimeException('Not used in this test.');
+                }
+
+                public function getConsumer(): ConsumerInterface
+                {
+                    throw new RuntimeException('Not used in this test.');
+                }
+            },
+        ]);
+
+        $this->assertFalse($service->ping());
+        $this->assertNotNull($service->getLastError());
+        $this->assertStringContainsString('[redacted]', $service->getLastError());
+        $this->assertStringNotContainsString('secret', $service->getLastError());
+        $this->assertStringNotContainsString('abc', $service->getLastError());
+        $this->assertStringNotContainsString('dsn-secret', $service->getLastError());
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testDecodeEnvelopeRejectsOversizedBodyWithoutBodyLeak(): void
+    {
+        $service = new RabbitMqService([
+            'maxMessageBodyBytes' => 5,
+        ]);
+        $body = '{"password":"secret"}';
+
+        try {
+            $service->decodeEnvelope($body);
+            $this->fail('Oversized body should throw.');
+        } catch (RabbitMqException $e) {
+            $this->assertSame(ErrorCode::MESSAGE_LIMIT_EXCEEDED, $e->getErrorCode());
+            $this->assertStringNotContainsString($body, $e->getMessage());
+            $this->assertStringNotContainsString('secret', $e->getMessage());
+        }
     }
 }

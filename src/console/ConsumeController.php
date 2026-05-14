@@ -60,7 +60,7 @@ class ConsumeController extends BaseRabbitMqController
             } catch (Throwable $e) {
                 $message = $this->isDiscoveryUnavailable($e)
                     ? 'Discovery is disabled; enable it to run consumers by id.'
-                    : $e->getMessage();
+                    : $this->exceptionMessage($e);
                 $this->stderr($message . PHP_EOL);
                 return 1;
             }
@@ -94,7 +94,7 @@ class ConsumeController extends BaseRabbitMqController
             $exitCode = $rabbit->createRunner()->run($queue, $handler, $options, $runnerOptions);
             Yii::info('Consumer stopped for queue: ' . $queue, 'rabbitmq');
         } catch (FatalException $e) {
-            $this->stderr($e->getMessage() . PHP_EOL);
+            $this->stderr($this->exceptionMessage($e) . PHP_EOL);
 
             return 1;
         }
@@ -115,7 +115,7 @@ class ConsumeController extends BaseRabbitMqController
         } catch (Throwable $e) {
             $message = $this->isDiscoveryUnavailable($e)
                 ? 'Discovery is disabled; enable it to list consumers.'
-                : $e->getMessage();
+                : $this->exceptionMessage($e);
             $this->stderr($message . PHP_EOL);
             return 1;
         }

@@ -16,6 +16,7 @@ class ErrorCode
     public const CONSUME_FAILED = 'CONSUME_FAILED';
     public const HANDLER_FAILED = 'HANDLER_FAILED';
     public const SERIALIZATION_FAILED = 'SERIALIZATION_FAILED';
+    public const MESSAGE_LIMIT_EXCEEDED = 'MESSAGE_LIMIT_EXCEEDED';
     public const RPC_TIMEOUT = 'RPC_TIMEOUT';
     public const TOPOLOGY_INVALID = 'TOPOLOGY_INVALID';
     public const DLQ_FAILED = 'DLQ_FAILED';

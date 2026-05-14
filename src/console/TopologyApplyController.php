@@ -28,7 +28,7 @@ class TopologyApplyController extends BaseRabbitMqController
             }
             $rabbit->applyTopology($topology, $this->dryRun);
         } catch (Throwable $e) {
-            $this->stderr($e->getMessage() . PHP_EOL);
+            $this->stderr($this->exceptionMessage($e) . PHP_EOL);
             return 1;
         }
 

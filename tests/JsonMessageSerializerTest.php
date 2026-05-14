@@ -215,6 +215,40 @@ class JsonMessageSerializerTest extends TestCase
         }
     }
 
+    public function testDecodeDepthIsConfigurable(): void
+    {
+        $serializer = new JsonMessageSerializer([
+            'decodeDepth' => 1,
+        ]);
+
+        $this->assertFalse($serializer->canDecode('{"a":1}'));
+
+        try {
+            $serializer->decode('{"a":1}');
+            $this->fail('Decode should throw when JSON depth exceeds configured limit.');
+        } catch (RabbitMqException $e) {
+            $this->assertSame(ErrorCode::SERIALIZATION_FAILED, $e->getErrorCode());
+            $this->assertStringNotContainsString('{"a":1}', $e->getMessage());
+        }
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testServicePassesJsonDecodeDepthToSerializerArrayConfig(): void
+    {
+        $service = new RabbitMqService([
+            'jsonDecodeDepth' => 1,
+            'serializer' => [
+                'class' => JsonMessageSerializer::class,
+            ],
+        ]);
+
+        $this->expectException(RabbitMqException::class);
+        $service->decodeEnvelope('{"a":1}');
+    }
+
     public function testEncodeInvalidPayloadThrowsRabbitMqException(): void
     {
         $serializer = new JsonMessageSerializer();

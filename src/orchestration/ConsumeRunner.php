@@ -16,6 +16,8 @@ use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
 use illusiard\rabbitmq\definitions\consumer\RuntimeConsumer;
 use illusiard\rabbitmq\definitions\handler\HandlerInterface;
 use illusiard\rabbitmq\definitions\middleware\MiddlewareInterface;
+use illusiard\rabbitmq\exceptions\ErrorCode;
+use illusiard\rabbitmq\exceptions\RabbitMqException;
 use illusiard\rabbitmq\helpers\FileHelper;
 use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\middleware\ConsumeMiddlewareInterface;
@@ -207,12 +209,12 @@ class ConsumeRunner
             $core
         );
 
-        return function (string $body, array $meta) use ($runner, $consumer, $classifier, $retryMiddleware): ConsumeResult {
+        return function (string $body, array $meta) use ($runner, $consumer, $classifier, $retryMiddleware, $options): ConsumeResult {
             try {
                 $context = $this->buildContext($body, $meta, $consumer);
             } catch (Throwable $e) {
                 $context = $this->buildFallbackContext($body, $meta, $consumer);
-                $result = $classifier->classify($e, $context);
+                $result = $this->classifyDecodeException($e, $context, $classifier, $options);
 
                 return $this->finalizeResult($retryMiddleware->process($context, static fn(): ConsumeResult => $result));
             }
@@ -347,6 +349,13 @@ class ConsumeRunner
         return $middlewares;
     }
 
+    /**
+     * @param string $middleware
+     * @param $registry
+     * @return string
+     * @throws InvalidConfigException
+     * @throws JsonException
+     */
     private function resolveMiddlewareClass(string $middleware, $registry): string
     {
         if (class_exists($middleware)) {
@@ -380,6 +389,7 @@ class ConsumeRunner
     private function instantiateMiddleware(string $class, ConsumerInterface $consumer, string $handlerClass, array $config = []): MiddlewareInterface
     {
         $config = $config ?: ['class' => $class];
+        /** @var object $instance */
         $instance = Yii::createObject($config);
 
         if ($instance instanceof MiddlewareInterface) {
@@ -548,6 +558,27 @@ class ConsumeRunner
         }
 
         return $normalized;
+    }
+
+    private function classifyDecodeException(
+        Throwable $e,
+        ConsumeContext $context,
+        DefaultExceptionClassifier $classifier,
+        array $options
+    ): ConsumeResult {
+        if ($e instanceof RabbitMqException && $e->getErrorCode() === ErrorCode::MESSAGE_LIMIT_EXCEEDED) {
+            $action = $options['messageLimitExceededAction'] ?? 'reject';
+            if ($action === 'retry') {
+                return ConsumeResult::retry();
+            }
+            if ($action === 'stop') {
+                return ConsumeResult::stop();
+            }
+
+            return ConsumeResult::reject();
+        }
+
+        return $classifier->classify($e, $context);
     }
 
 }

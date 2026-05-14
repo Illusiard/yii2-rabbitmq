@@ -22,6 +22,11 @@ use yii\base\InvalidConfigException;
  */
 class ConsumeIntegrationTest extends IntegrationTestCase
 {
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     * @throws Throwable
+     */
     public function testAMQP_CONSUME_01_gracefulShutdown(): void
     {
         $readyFile = sys_get_temp_dir() . '/rpc_ready_' . uniqid('', true) . '.txt';
@@ -38,7 +43,7 @@ class ConsumeIntegrationTest extends IntegrationTestCase
         $queue = $this->uniqueName('shutdown_q');
         $this->declareQueue($queue);
 
-        $this->publishRaw('payload', '', $queue);
+        $this->publishRaw('"payload"', '', $queue);
 
         $logFile = tempnam(sys_get_temp_dir(), 'consume_log_');
         if ($logFile === false) {
@@ -78,6 +83,8 @@ class ConsumeIntegrationTest extends IntegrationTestCase
         $status = proc_get_status($process);
         $this->assertTrue($status['running']);
 
+        $this->assertTrue($this->waitForLogLines($logFile, 1, 5), 'Consumer did not handle the queued message.');
+
         posix_kill($status['pid'], SIGTERM);
 
         $exitCode = ProcessHelper::waitForProcessExit($process, 10);
@@ -97,6 +104,21 @@ class ConsumeIntegrationTest extends IntegrationTestCase
         }
     }
 
+    private function waitForLogLines(string $path, int $expected, int $timeoutSec): bool
+    {
+        $deadline = microtime(true) + max(0, $timeoutSec);
+
+        while (microtime(true) < $deadline) {
+            $lines = file_exists($path) ? file($path, FILE_IGNORE_NEW_LINES) : [];
+            if (is_array($lines) && count($lines) >= $expected) {
+                return true;
+            }
+            usleep(10_000);
+        }
+
+        return false;
+    }
+
     /**
      * @return void
      * @throws Throwable
@@ -105,7 +127,7 @@ class ConsumeIntegrationTest extends IntegrationTestCase
     {
         $queue = $this->uniqueName('fatal_q');
         $this->declareQueue($queue);
-        $this->publishRaw('payload', '', $queue);
+        $this->publishRaw('"payload"', '', $queue);
 
         $connection = new AmqpConnection($this->getRabbitConfig());
         $consumer = new AmqpConsumer($connection);

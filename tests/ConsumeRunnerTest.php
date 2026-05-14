@@ -7,10 +7,13 @@ use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
 use illusiard\rabbitmq\definitions\consumer\RuntimeConsumer;
 use illusiard\rabbitmq\exceptions\ErrorCode;
 use illusiard\rabbitmq\exceptions\RecoverableException;
+use illusiard\rabbitmq\middleware\ConsumeLoggingMiddleware;
+use illusiard\rabbitmq\middleware\MemoryLimitMiddleware;
 use illusiard\rabbitmq\tests\fixtures\CountingConsumeMiddleware;
 use illusiard\rabbitmq\tests\fixtures\NonHandlerInvokable;
 use illusiard\rabbitmq\tests\fixtures\RunnerDecodeRetryRabbitMqService;
 use illusiard\rabbitmq\tests\fixtures\RunnerLockRabbitMqService;
+use illusiard\rabbitmq\tests\fixtures\RunnerMiddlewareConsumer;
 use illusiard\rabbitmq\tests\fixtures\RunnerMiddlewareRabbitMqService;
 use illusiard\rabbitmq\tests\fixtures\RunnerRecordingRabbitMqService;
 use illusiard\rabbitmq\tests\fixtures\RunnerRecoverableRetryRabbitMqService;
@@ -108,6 +111,7 @@ class ConsumeRunnerTest extends TestCase
     public function testMiddlewareOrderIsSystemBeforeUserSystemAfter(): void
     {
         TestRunnerUserMiddleware::$actions = [];
+        RunnerMiddlewareConsumer::$lastAction = null;
 
         $service = new RunnerMiddlewareRabbitMqService();
 
@@ -128,6 +132,105 @@ class ConsumeRunnerTest extends TestCase
             'handler',
             'user-after-retry',
         ], TestRunnerUserMiddleware::$actions);
+        $this->assertSame(ConsumeResult::ACTION_REJECT, RunnerMiddlewareConsumer::$lastAction);
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testBuiltInConsumeMiddlewaresPreserveConsumeResultAction(): void
+    {
+        RunnerMiddlewareConsumer::$lastAction = null;
+
+        $service = new RunnerMiddlewareRabbitMqService();
+        $runner = new ConsumeRunner($service);
+
+        $exitCode = $runner->run('queue', static fn(): ConsumeResult => ConsumeResult::stop(), [
+            'consumeMiddlewares' => [
+                ConsumeLoggingMiddleware::class,
+                [
+                    'class' => MemoryLimitMiddleware::class,
+                    'memoryLimitBytes' => 1024 * 1024 * 1024,
+                ],
+            ],
+        ]);
+
+        $this->assertSame(0, $exitCode);
+        $this->assertSame(ConsumeResult::ACTION_STOP, RunnerMiddlewareConsumer::$lastAction);
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testOversizedMessageCanStopConsumerBeforeHandler(): void
+    {
+        RunnerMiddlewareConsumer::$lastAction = null;
+
+        $service = new RunnerMiddlewareRabbitMqService([
+            'maxMessageBodyBytes' => 1,
+            'messageLimitExceededAction' => 'stop',
+        ]);
+        $runner = new ConsumeRunner($service);
+
+        $exitCode = $runner->run('queue', static fn(): bool => true);
+
+        $this->assertSame(0, $exitCode);
+        $this->assertSame(ConsumeResult::ACTION_STOP, RunnerMiddlewareConsumer::$lastAction);
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testOversizedMessageDefaultsToRejectBeforeHandler(): void
+    {
+        RunnerMiddlewareConsumer::$lastAction = null;
+
+        $service = new RunnerMiddlewareRabbitMqService([
+            'maxMessageBodyBytes' => 1,
+        ]);
+        $runner = new ConsumeRunner($service);
+
+        $exitCode = $runner->run('queue', static fn(): bool => true);
+
+        $this->assertSame(0, $exitCode);
+        $this->assertSame(ConsumeResult::ACTION_REJECT, RunnerMiddlewareConsumer::$lastAction);
+    }
+
+    /**
+     * @return void
+     * @throws InvalidConfigException
+     */
+    public function testOversizedMessageCanUseManagedRetry(): void
+    {
+        $service = new RunnerRecoverableRetryRabbitMqService([
+            'maxMessageBodyBytes' => 1,
+            'messageLimitExceededAction' => 'retry',
+            'topology' => [
+                'options' => [
+                    'retryExchange' => 'retry-ex',
+                ],
+            ],
+        ]);
+        $runner = new ConsumeRunner($service);
+
+        $exitCode = $runner->run('queue', static fn(): bool => true, [
+            'managedRetry' => [
+                'enabled' => true,
+                'maxAttempts' => 3,
+                'retryQueues' => [
+                    ['name' => 'queue.retry.1', 'ttlMs' => 5000],
+                ],
+                'deadQueue' => 'queue.dead',
+            ],
+        ]);
+
+        $this->assertSame(0, $exitCode);
+        $this->assertCount(1, $service->published);
+        $this->assertSame('retry-ex', $service->published[0]['exchange']);
+        $this->assertSame('queue.retry.1', $service->published[0]['routingKey']);
     }
 
     /**

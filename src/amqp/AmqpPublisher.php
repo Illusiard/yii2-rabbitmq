@@ -2,17 +2,21 @@
 
 namespace illusiard\rabbitmq\amqp;
 
+use Exception;
+use InvalidArgumentException;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
+use RuntimeException;
+use Throwable;
 use Yii;
 use illusiard\rabbitmq\contracts\PublisherInterface;
 use illusiard\rabbitmq\contracts\ReturnHandlerInterface;
-use illusiard\rabbitmq\amqp\ReturnedMessage;
-use illusiard\rabbitmq\amqp\ReturnSinkInterface;
 use illusiard\rabbitmq\exceptions\PublishException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
+use illusiard\rabbitmq\helpers\SensitiveDataHelper;
+use yii\base\InvalidConfigException;
 
 class AmqpPublisher implements PublisherInterface
 {
@@ -28,6 +32,11 @@ class AmqpPublisher implements PublisherInterface
     private bool $returnSinkEnabled;
     private ?ReturnSinkInterface $returnSink;
 
+    /**
+     * @param AmqpConnection $connection
+     * @param array $config
+     * @throws InvalidConfigException
+     */
     public function __construct(AmqpConnection $connection, array $config = [])
     {
         $this->connection = $connection;
@@ -42,6 +51,15 @@ class AmqpPublisher implements PublisherInterface
         $this->returnSink = $this->resolveReturnSink($config['returnSink'] ?? null);
     }
 
+    /**
+     * @param string $body
+     * @param string $exchange
+     * @param string $routingKey
+     * @param array $properties
+     * @param array $headers
+     * @return void
+     * @throws Exception
+     */
     public function publish(
         string $body,
         string $exchange = '',
@@ -70,20 +88,28 @@ class AmqpPublisher implements PublisherInterface
 
         try {
             $channel->basic_publish($message, $exchange, $routingKey, $this->mandatory);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if ($seqNo !== null) {
                 $this->tracker->remove($seqNo);
             }
             $this->resetChannel();
+            if ($e instanceof PublishException) {
+                throw $e;
+            }
             $this->logPublishError(
                 ErrorCode::PUBLISH_FAILED,
-                'Publish failed: ' . $e->getMessage(),
+                'Publish failed: ' . SensitiveDataHelper::redact($e->getMessage()),
                 $messageId,
                 $correlationId,
                 $exchange,
                 $routingKey
             );
-            throw new PublishException('Publish failed: ' . $e->getMessage(), ErrorCode::PUBLISH_FAILED, 0, $e);
+            throw new PublishException(
+                'Publish failed: ' . SensitiveDataHelper::redact($e->getMessage()),
+                ErrorCode::PUBLISH_FAILED,
+                0,
+                $e
+            );
         }
 
         try {
@@ -97,6 +123,10 @@ class AmqpPublisher implements PublisherInterface
         }
     }
 
+    /**
+     * @return AMQPChannel
+     * @throws Exception
+     */
     private function getChannel(): AMQPChannel
     {
         if ($this->channel !== null && $this->channel->is_open()) {
@@ -139,7 +169,7 @@ class AmqpPublisher implements PublisherInterface
 
             try {
                 $messageId = $arg->get('message_id');
-            } catch (\Throwable $e) {
+            } catch (Throwable) {
                 // ignore
             }
 
@@ -152,7 +182,7 @@ class AmqpPublisher implements PublisherInterface
 
             try {
                 $correlationId = $arg->get('correlation_id');
-            } catch (\Throwable $e) {
+            } catch (Throwable) {
                 // ignore
             }
 
@@ -163,10 +193,10 @@ class AmqpPublisher implements PublisherInterface
                 }
             }
 
-            throw new \RuntimeException('Confirm callback passed AMQPMessage without correlatable message_id.');
+            throw new RuntimeException('Confirm callback passed AMQPMessage without correlatable message_id.');
         }
 
-        throw new \RuntimeException('Unexpected confirm callback argument type: ' . (is_object($arg) ? get_class($arg) : gettype($arg)));
+        throw new RuntimeException('Unexpected confirm callback argument type: ' . (get_debug_type($arg)));
     }
 
     private function installChannelListeners(AMQPChannel $channel): void
@@ -260,7 +290,7 @@ class AmqpPublisher implements PublisherInterface
                 } else {
                     $channel->wait(null, false, $remaining);
                 }
-            } catch (AMQPTimeoutException $e) {
+            } catch (AMQPTimeoutException) {
                 break;
             }
 
@@ -339,9 +369,12 @@ class AmqpPublisher implements PublisherInterface
     {
         if (is_object($message)) {
             if (method_exists($message, 'get')) {
-                $value = $message->get('message_id');
-                if (is_string($value) && $value !== '') {
-                    return $value;
+                try {
+                    $value = $message->get('message_id');
+                    if (is_string($value) && $value !== '') {
+                        return $value;
+                    }
+                } catch (Throwable) {
                 }
             }
 
@@ -360,9 +393,12 @@ class AmqpPublisher implements PublisherInterface
     {
         if (is_object($message)) {
             if (method_exists($message, 'get')) {
-                $value = $message->get('correlation_id');
-                if (is_string($value) && $value !== '') {
-                    return $value;
+                try {
+                    $value = $message->get('correlation_id');
+                    if (is_string($value) && $value !== '') {
+                        return $value;
+                    }
+                } catch (Throwable) {
                 }
             }
 
@@ -381,7 +417,7 @@ class AmqpPublisher implements PublisherInterface
     {
         try {
             return bin2hex(random_bytes(16));
-        } catch (\Throwable $e) {
+        } catch (Throwable) {
             return uniqid('msg_', true);
         }
     }
@@ -417,11 +453,16 @@ class AmqpPublisher implements PublisherInterface
             } else {
                 $this->channel->wait(null, false, $timeout);
             }
-        } catch (AMQPTimeoutException $e) {
+        } catch (AMQPTimeoutException) {
             return;
         }
     }
 
+    /**
+     * @param $handler
+     * @return ?ReturnHandlerInterface
+     * @throws InvalidConfigException
+     */
     private function resolveReturnHandler($handler): ?ReturnHandlerInterface
     {
         if (!$this->returnHandlerEnabled || $handler === null) {
@@ -434,12 +475,17 @@ class AmqpPublisher implements PublisherInterface
 
         $instance = Yii::createObject($handler);
         if (!$instance instanceof ReturnHandlerInterface) {
-            throw new \InvalidArgumentException('returnHandler must implement ReturnHandlerInterface.');
+            throw new InvalidArgumentException('returnHandler must implement ReturnHandlerInterface.');
         }
 
         return $instance;
     }
 
+    /**
+     * @param $sink
+     * @return ?ReturnSinkInterface
+     * @throws InvalidConfigException
+     */
     private function resolveReturnSink($sink): ?ReturnSinkInterface
     {
         if (!$this->returnSinkEnabled || $sink === null) {
@@ -452,7 +498,7 @@ class AmqpPublisher implements PublisherInterface
 
         $instance = Yii::createObject($sink);
         if (!$instance instanceof ReturnSinkInterface) {
-            throw new \InvalidArgumentException('returnSink must implement ReturnSinkInterface.');
+            throw new InvalidArgumentException('returnSink must implement ReturnSinkInterface.');
         }
 
         return $instance;
@@ -507,21 +553,19 @@ class AmqpPublisher implements PublisherInterface
         }
 
         $event = new ReturnedMessage(
-            $messageId !== null ? (string)$messageId : null,
+            $messageId,
             $correlationId,
             $exchange,
             $routingKey,
-            (int)$replyCode,
-            (string)$replyText,
+            $replyCode,
+            $replyText,
             $headers,
             is_array($properties) ? $properties : [],
             $bodySize,
             microtime(true)
         );
 
-        if ($handler !== null) {
-            $handler->handle($event);
-        }
+        $handler?->handle($event);
 
         return $event;
     }

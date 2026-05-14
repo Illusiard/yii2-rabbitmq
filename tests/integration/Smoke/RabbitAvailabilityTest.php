@@ -4,6 +4,7 @@ namespace illusiard\rabbitmq\tests\integration\Smoke;
 
 use PHPUnit\Framework\TestCase;
 use illusiard\rabbitmq\components\RabbitMqService;
+use Throwable;
 
 /**
  * @group integration
@@ -21,13 +22,17 @@ class RabbitAvailabilityTest extends TestCase
             if (!$ok) {
                 $error = $service->getLastError();
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $error = get_class($e) . ': ' . $e->getMessage();
         }
 
         $message = 'RabbitMQ unavailable at ' . $this->getConnectionDsnForMessage();
         if ($error) {
             $message .= ' (' . $error . ')';
+        }
+
+        if (!$ok && $this->envFlagEnabled('RABBITMQ_REQUIRED')) {
+            $this->fail($message);
         }
 
         if (!$ok) {
@@ -68,5 +73,11 @@ class RabbitAvailabilityTest extends TestCase
             $config['vhost'],
             $config['user']
         );
+    }
+
+    private function envFlagEnabled(string $name): bool
+    {
+        $value = getenv($name);
+        return $value === '1' || $value === 'true' || $value === 'yes';
     }
 }

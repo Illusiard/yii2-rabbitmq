@@ -7,6 +7,7 @@ use Yii;
 use yii\base\InvalidConfigException;
 use yii\console\Controller;
 use illusiard\rabbitmq\components\RabbitMqService;
+use illusiard\rabbitmq\helpers\SensitiveDataHelper;
 use InvalidArgumentException;
 
 abstract class BaseRabbitMqController extends Controller
@@ -46,5 +47,10 @@ abstract class BaseRabbitMqController extends Controller
             'Discovery paths are not configured.',
             'Handler discovery is disabled because no handlers path is configured.',
         ], true);
+    }
+
+    protected function exceptionMessage(Throwable $e): string
+    {
+        return SensitiveDataHelper::redact($e->getMessage());
     }
 }

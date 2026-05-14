@@ -2,6 +2,8 @@
 
 namespace illusiard\rabbitmq\amqp;
 
+use Exception;
+use illusiard\rabbitmq\contracts\PublisherInterface;
 use PhpAmqpLib\Wire\AMQPTable;
 use PhpAmqpLib\Exception\AMQPChannelClosedException;
 use PhpAmqpLib\Exception\AMQPConnectionClosedException;
@@ -19,13 +21,17 @@ use illusiard\rabbitmq\definitions\consume\ConsumeResult;
 class AmqpConsumer implements ConsumerInterface
 {
     private AmqpConnection $connection;
+    private int $reconnectAttempts;
+    private int $reconnectDelaySeconds;
     /** @var callable|null */
     private $shouldStop;
     private bool $internalStopRequested = false;
 
-    public function __construct(AmqpConnection $connection)
+    public function __construct(AmqpConnection $connection, array $config = [])
     {
         $this->connection = $connection;
+        $this->reconnectAttempts = max(1, (int)($config['consumeReconnectAttempts'] ?? 3));
+        $this->reconnectDelaySeconds = max(0, (int)($config['consumeReconnectDelaySeconds'] ?? 1));
     }
 
     public function setStopChecker(callable $shouldStop): void
@@ -33,10 +39,17 @@ class AmqpConsumer implements ConsumerInterface
         $this->shouldStop = $shouldStop;
     }
 
-    public function setManagedRetry(bool $enabled, array $policy, ?\illusiard\rabbitmq\contracts\PublisherInterface $publisher): void
+    public function setManagedRetry(bool $enabled, array $policy, ?PublisherInterface $publisher): void
     {
     }
 
+    /**
+     * @param string $queue
+     * @param callable $handler
+     * @param int $prefetch
+     * @return void
+     * @throws Throwable
+     */
     public function consume(string $queue, callable $handler, int $prefetch = 1): void
     {
         $attempts = 0;
@@ -53,7 +66,7 @@ class AmqpConsumer implements ConsumerInterface
                 $this->consumeOnce($queue, $handler, $prefetch);
                 return;
             } catch (Throwable $e) {
-                if (!$this->isConnectionException($e) || $attempts >= 3) {
+                if (!$this->isConnectionException($e) || $attempts >= $this->reconnectAttempts) {
                     $code = $e instanceof RabbitMqException ? $e->getErrorCode() : ErrorCode::CONSUME_FAILED;
                     Yii::error($code . ' exception=' . get_class($e), 'rabbitmq');
                     throw $e;
@@ -61,11 +74,20 @@ class AmqpConsumer implements ConsumerInterface
 
                 Yii::warning(ErrorCode::CONNECTION_FAILED . ' Connection lost: exception=' . get_class($e), 'rabbitmq');
                 $this->connection->close();
-                sleep(1);
+                if ($this->reconnectDelaySeconds > 0) {
+                    sleep($this->reconnectDelaySeconds);
+                }
             }
         }
     }
 
+    /**
+     * @param string $queue
+     * @param callable $handler
+     * @param int $prefetch
+     * @return void
+     * @throws Exception
+     */
     private function consumeOnce(string $queue, callable $handler, int $prefetch): void
     {
         $channel = $this->connection->getAmqpConnection()->channel();
@@ -117,7 +139,7 @@ class AmqpConsumer implements ConsumerInterface
 
                 try {
                     $channel->wait(null, false, 1);
-                } catch (AMQPTimeoutException $e) {
+                } catch (AMQPTimeoutException) {
                     if ($this->isStopRequested()) {
                         $this->cancelIfNeeded($channel, $consumerTag);
                     }

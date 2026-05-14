@@ -47,6 +47,7 @@ class ConfigValidator
         $this->validateMiddlewares($config, 'publishMiddlewares');
         $this->validateMiddlewares($config, 'consumeMiddlewares');
         $this->validateConsumeOptions($config);
+        $this->validateMessageLimits($config);
         $this->validateReturnHandler($config);
         $this->validateReturnSink($config);
     }
@@ -210,9 +211,15 @@ class ConfigValidator
         $this->validateIntOption($config, 'readWriteTimeout', $path . '.readWriteTimeout', ErrorCode::CONFIG_INVALID);
         $this->validateIntOption($config, 'connectionTimeout', $path . '.connectionTimeout', ErrorCode::CONFIG_INVALID);
         $this->validateIntOption($config, 'publishTimeout', $path . '.publishTimeout', ErrorCode::CONFIG_INVALID, 1);
+        $this->validateIntOption($config, 'consumeReconnectAttempts', $path . '.consumeReconnectAttempts', ErrorCode::CONFIG_INVALID, 1);
+        $this->validateIntOption($config, 'consumeReconnectDelaySeconds', $path . '.consumeReconnectDelaySeconds', ErrorCode::CONFIG_INVALID);
         $this->validateBooleanOption($config, 'confirm', $path . '.confirm', ErrorCode::CONFIG_INVALID);
         $this->validateBooleanOption($config, 'mandatory', $path . '.mandatory', ErrorCode::CONFIG_INVALID);
         $this->validateBooleanOption($config, 'mandatoryStrict', $path . '.mandatoryStrict', ErrorCode::CONFIG_INVALID);
+
+        if (isset($config['ssl'])) {
+            $this->validateSsl($config['ssl'], $path . '.ssl');
+        }
     }
 
     private function validateMiddlewares(array $config, string $key): void
@@ -244,6 +251,45 @@ class ConfigValidator
         $this->validateBooleanOption($config, 'consumeFailFast', 'consumeFailFast', ErrorCode::CONFIG_INVALID);
         $this->validateClassList($config, 'fatalExceptionClasses', 'fatalExceptionClasses');
         $this->validateClassList($config, 'recoverableExceptionClasses', 'recoverableExceptionClasses');
+    }
+
+    private function validateMessageLimits(array $config): void
+    {
+        $this->validateIntOption($config, 'maxMessageBodyBytes', 'maxMessageBodyBytes', ErrorCode::CONFIG_INVALID);
+        $this->validateIntOption($config, 'jsonDecodeDepth', 'jsonDecodeDepth', ErrorCode::CONFIG_INVALID, 1);
+
+        if (isset($config['messageLimitExceededAction'])
+            && !in_array($config['messageLimitExceededAction'], ['reject', 'retry', 'stop'], true)
+        ) {
+            throw new RabbitMqException(
+                'messageLimitExceededAction must be reject, retry, or stop.',
+                ErrorCode::CONFIG_INVALID
+            );
+        }
+    }
+
+    private function validateSsl($ssl, string $path): void
+    {
+        if ($ssl === null) {
+            return;
+        }
+
+        if (!is_array($ssl)) {
+            throw new RabbitMqException($path . ' must be an array or null.', ErrorCode::CONFIG_INVALID);
+        }
+
+        foreach ($ssl as $key => $value) {
+            if (!is_string($key) || $key === '') {
+                throw new RabbitMqException($path . ' keys must be non-empty strings.', ErrorCode::CONFIG_INVALID);
+            }
+
+            if (!is_string($value) && !is_int($value) && !is_bool($value) && !is_array($value) && $value !== null) {
+                throw new RabbitMqException(
+                    $path . '.' . $key . ' must be string, integer, boolean, array, or null.',
+                    ErrorCode::CONFIG_INVALID
+                );
+            }
+        }
     }
 
     private function validateRetryPolicy(array $policy, string $path): void

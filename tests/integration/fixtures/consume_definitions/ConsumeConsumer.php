@@ -1,6 +1,6 @@
 <?php
 
-namespace illusiard\rabbitmq\tests\integration\fixtures;
+namespace illusiard\rabbitmq\tests\integration\fixtures\consume_definitions;
 
 use illusiard\rabbitmq\definitions\consumer\ConsumerInterface;
 use illusiard\rabbitmq\tests\integration\fixtures\ConsumeHandler;
@@ -18,7 +18,7 @@ class ConsumeConsumer implements ConsumerInterface
         return $queue;
     }
 
-    public function getHandler(): string
+    public function getHandler()
     {
         return ConsumeHandler::class;
     }

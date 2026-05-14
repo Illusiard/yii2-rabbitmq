@@ -13,7 +13,7 @@ class MiddlewaresController extends BaseRabbitMqController
         } catch (Throwable $e) {
             $message = $this->isDiscoveryUnavailable($e)
                 ? 'Discovery is disabled; enable it to list middlewares.'
-                : $e->getMessage();
+                : $this->exceptionMessage($e);
             $this->stderr($message . PHP_EOL);
             return 1;
         }

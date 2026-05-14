@@ -3,6 +3,7 @@
 namespace illusiard\rabbitmq\console;
 
 use illusiard\rabbitmq\dlq\DlqService;
+use Throwable;
 
 class DlqReplayController extends BaseRabbitMqController
 {
@@ -27,8 +28,8 @@ class DlqReplayController extends BaseRabbitMqController
             $count = $service->replay($fromQueue, $this->exchange, $this->routingKey, $this->limit);
             $this->stdout("Replayed: " . $count . PHP_EOL);
             return 0;
-        } catch (\Throwable $e) {
-            $this->stderr($e->getMessage() . PHP_EOL);
+        } catch (Throwable $e) {
+            $this->stderr($this->exceptionMessage($e) . PHP_EOL);
             return 1;
         }
     }

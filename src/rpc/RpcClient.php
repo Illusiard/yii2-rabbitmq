@@ -8,6 +8,7 @@ use illusiard\rabbitmq\components\RabbitMqService;
 use illusiard\rabbitmq\message\Envelope;
 use illusiard\rabbitmq\exceptions\RabbitMqException;
 use illusiard\rabbitmq\exceptions\ErrorCode;
+use illusiard\rabbitmq\helpers\SensitiveDataHelper;
 use Throwable;
 use yii\base\InvalidConfigException;
 
@@ -39,7 +40,12 @@ class RpcClient
             $queueData = $channel->queue_declare('', false, false, true, true);
             $replyQueue = is_array($queueData) ? (string)$queueData[0] : '';
         } catch (Throwable $e) {
-            throw new RabbitMqException('RPC channel failed: ' . $e->getMessage(), ErrorCode::CHANNEL_FAILED, 0, $e);
+            throw new RabbitMqException(
+                'RPC channel failed: ' . SensitiveDataHelper::redact($e->getMessage()),
+                ErrorCode::CHANNEL_FAILED,
+                0,
+                $e
+            );
         }
 
         $correlationId = $request->getCorrelationId();

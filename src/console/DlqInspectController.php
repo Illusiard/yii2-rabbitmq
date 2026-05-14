@@ -2,6 +2,8 @@
 
 namespace illusiard\rabbitmq\console;
 
+use JsonSerializable;
+use Throwable;
 use Yii;
 use illusiard\rabbitmq\dlq\DlqService;
 use PhpAmqpLib\Wire\AMQPTable;
@@ -31,13 +33,13 @@ class DlqInspectController extends BaseRabbitMqController
 
             if ($this->json) {
                 $items = $this->normalizeItemsForJson($items);
-                $this->stdout(json_encode($items) . PHP_EOL);
+                $this->stdout(json_encode($items, JSON_THROW_ON_ERROR) . PHP_EOL);
             } else {
                 $this->stdout(print_r($items, true) . PHP_EOL);
             }
             return 0;
-        } catch (\Throwable $e) {
-            $this->stderr($e->getMessage() . PHP_EOL);
+        } catch (Throwable $e) {
+            $this->stderr($this->exceptionMessage($e) . PHP_EOL);
             return 1;
         }
     }
@@ -62,7 +64,7 @@ class DlqInspectController extends BaseRabbitMqController
         }
 
         if (is_object($value)) {
-            if ($value instanceof \JsonSerializable) {
+            if ($value instanceof JsonSerializable) {
                 return $this->normalizeValue($value->jsonSerialize());
             }
             if (method_exists($value, '__toString')) {
